@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Timegate Demo</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: rgba(255,255,255,0.08);
+      --text: #e6edf3;
+      --muted: #7d8590;
+      --accent: #003764;
+      --accent-light: #1a5a8a;
+      --green: #008542;
+      --orange: #fa9014;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'IBM Plex Sans', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 48px 24px 120px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 48px;
+    }
+
+    .logo {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: clamp(28px, 5vw, 42px);
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--text);
+      margin-bottom: 12px;
+    }
+
+    h1 span { color: var(--accent-light); }
+
+    .tagline {
+      font-size: 15px;
+      color: var(--muted);
+      font-weight: 300;
+      max-width: 480px;
+      line-height: 1.6;
+    }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      width: 100%;
+      max-width: 860px;
+      margin-bottom: 48px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 24px;
+    }
+
+    .card-label {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .card-body {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .state-dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      margin-right: 7px;
+      vertical-align: middle;
+    }
+    .dot-blue { background: var(--accent-light); }
+    .dot-orange { background: var(--orange); }
+    .dot-green { background: var(--green); }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      justify-content: center;
+      margin-bottom: 40px;
+    }
+
+    button {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      padding: 10px 20px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent-light);
+      color: #fff;
+    }
+    .btn-primary:hover { background: var(--accent-light); }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--muted);
+    }
+    .btn-ghost:hover { color: var(--text); border-color: rgba(255,255,255,0.2); }
+
+    .config-box {
+      width: 100%;
+      max-width: 860px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 24px;
+    }
+
+    .config-box h2 {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+
+    .config-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+
+    .config-row label {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+      color: var(--muted);
+      min-width: 180px;
+    }
+
+    input[type="number"], select {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 13px;
+      padding: 6px 10px;
+      width: 100px;
+    }
+
+    select { width: 140px; }
+
+    .notice {
+      margin-top: 20px;
+      padding: 12px 16px;
+      background: rgba(0, 55, 100, 0.2);
+      border: 1px solid rgba(26, 90, 138, 0.4);
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .notice strong { color: var(--text); }
+
+    /* ── Timegate widget styles (from timegate.css) ── */
+    #timegate-root {
+      position: fixed;
+      z-index: 2147483647;
+      pointer-events: none;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #fff;
+      bottom: calc(16px + env(safe-area-inset-bottom));
+      right: calc(16px + env(safe-area-inset-right));
+    }
+    #timegate-root.timegate--bottom-left { left: calc(16px + env(safe-area-inset-left)); right: auto; }
+    #timegate-root.timegate--hidden { display: none; }
+    .timegate-card {
+      background: rgba(20,20,20,0.88);
+      border: 1px solid rgba(255,255,255,0.12);
+      box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+      border-radius: 10px;
+      position: relative;
+      padding: 10px 12px;
+      min-width: 0;
+      text-align: right;
+      backdrop-filter: blur(6px);
+    }
+    .timegate-close {
+      position: absolute; top: -8px; right: -8px;
+      width: 18px; height: 18px;
+      display: none; align-items: center; justify-content: center;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.45);
+      border: 1px solid rgba(255,255,255,0.25);
+      color: #fff; font-size: 9px; line-height: 1; padding: 0;
+      cursor: pointer; pointer-events: all;
+    }
+    .timegate-label { font-size: 11px; letter-spacing: 0.02em; opacity: 0.78; text-transform: uppercase; }
+    .timegate-time { font-size: 18px; font-weight: 700; margin-top: 2px; }
+    .timegate-sub { font-size: 11px; margin-top: 4px; opacity: 0.75; display: block; }
+    .timegate--state-normal .timegate-card { background: #003764; border-color: #1a5a8a; color: #fff; }
+    .timegate--state-paused .timegate-card { background: #fa9014; border-color: #c97010; color: #000; animation: timegate-pulse 2s ease-in-out infinite; }
+    .timegate--state-complete .timegate-card {
+      background: #008542; border-color: #00c463; color: #fff;
+      overflow: visible; display: flex; flex-direction: column;
+      justify-content: center; align-items: center; text-align: center;
+      padding: 14px; max-width: 180px;
+    }
+    .timegate--state-complete .timegate-label { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; opacity: 0.78; text-transform: uppercase; display: block; }
+    .timegate--state-complete .timegate-time { font-size: 11px; font-weight: 400; margin-top: 4px; line-height: 1.4; white-space: normal; opacity: 0.85; }
+    .timegate--state-complete .timegate-sub { display: none; }
+    .timegate--state-complete .timegate-close { display: flex; }
+    @keyframes timegate-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.65; } }
+    @media (max-width: 480px) { .timegate-card { min-width: 100px; padding: 8px 10px; } .timegate-time { font-size: 16px; } }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="logo">Security Industry Specialists · Training</div>
+    <h1>Time<span>gate</span></h1>
+    <p class="tagline">SCORM completion timer overlay — standalone demo. The widget in the corner is live. Interact with the page to reset the idle timer.</p>
+  </header>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-label">State 1</div>
+      <div class="card-title"><span class="state-dot dot-blue"></span>Counting</div>
+      <div class="card-body">Timer is active. The widget shows time remaining and counts down while the learner is on-page and not idle.</div>
+    </div>
+    <div class="card">
+      <div class="card-label">State 2</div>
+      <div class="card-title"><span class="state-dot dot-orange"></span>Paused — Idle</div>
+      <div class="card-body">No activity detected for the idle timeout window. Timer stops and the widget pulses orange until activity resumes.</div>
+    </div>
+    <div class="card">
+      <div class="card-label">State 3</div>
+      <div class="card-title"><span class="state-dot dot-green"></span>Time Requirement Met</div>
+      <div class="card-body">Minimum time has elapsed. Widget turns green and prompts the learner to complete remaining content before exiting.</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn-primary" onclick="resetTimer()">↺ Reset Timer</button>
+    <button class="btn-ghost" onclick="goIdle()">Simulate Idle</button>
+    <button class="btn-ghost" onclick="goComplete()">Simulate Complete</button>
+  </div>
+
+  <div class="config-box">
+    <h2>Active Configuration</h2>
+    <div class="config-row">
+      <label>minRequiredMinutes</label>
+      <input type="number" id="cfg-minutes" value="1" min="0" step="0.5" onchange="applyConfig()" />
+    </div>
+    <div class="config-row">
+      <label>idleTimeoutSeconds</label>
+      <input type="number" id="cfg-idle" value="60" min="5" onchange="applyConfig()" />
+    </div>
+    <div class="config-row">
+      <label>position</label>
+      <select id="cfg-position" onchange="applyConfig()">
+        <option value="bottom-right" selected>bottom-right</option>
+        <option value="bottom-left">bottom-left</option>
+      </select>
+    </div>
+    <div class="notice">
+      <strong>Note:</strong> In production, these values come from <code>timegate.config.json</code> inside the SCORM package. This demo uses <code>window.TIMEGATE_CONFIG</code> to inject them directly. SCORM completion gating is disabled here — no LMS is present.
+    </div>
+  </div>
+
+  <script>
+    // Expose config globally so timegate.js picks it up
+    window.TIMEGATE_CONFIG = {
+      minRequiredMinutes: 1,
+      enforceCompletion: false,
+      idleTimeoutSeconds: 60,
+      backgroundGraceSeconds: 30,
+      countWhileMediaPlaying: true,
+      hideWhenComplete: false,
+      position: 'bottom-right',
+      debug: true,
+      storageMode: 'localStorage'
+    };
+
+    function applyConfig() {
+      var mins = parseFloat(document.getElementById('cfg-minutes').value) || 1;
+      var idle = parseInt(document.getElementById('cfg-idle').value) || 60;
+      var pos  = document.getElementById('cfg-position').value;
+      window.TIMEGATE_CONFIG.minRequiredMinutes = mins;
+      window.TIMEGATE_CONFIG.idleTimeoutSeconds = idle;
+      window.TIMEGATE_CONFIG.position = pos;
+      note('Config updated — reload the page to apply changes.');
+    }
+
+    function note(msg) {
+      var n = document.querySelector('.notice');
+      n.innerHTML = '<strong>Note:</strong> ' + msg;
+    }
+
+    function resetTimer() {
+      try { localStorage.clear(); } catch(e) {}
+      location.reload();
+    }
+
+    // Simulate idle by temporarily hiding the document
+    function goIdle() {
+      note('Simulating idle — move your mouse or press a key to resume.');
+      Object.defineProperty(document, 'hidden', { value: true, writable: true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      setTimeout(function() {
+        Object.defineProperty(document, 'hidden', { value: false, writable: true, configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+      }, 8000);
+    }
+
+    function goComplete() {
+      // Fast-forward by overwriting localStorage state
+      try {
+        var key = null;
+        for (var k in localStorage) {
+          if (k.indexOf('timegate-overhaul.v1.') === 0 && k.indexOf('.lock.') === -1) { key = k; break; }
+        }
+        if (key) {
+          var val = JSON.parse(localStorage.getItem(key));
+          if (val) {
+            val.elapsedSeconds = val.minRequiredSeconds + 1;
+            val.minMetAt = new Date().toISOString();
+            localStorage.setItem(key, JSON.stringify(val));
+            location.reload();
+          }
+        } else {
+          note('Timer not yet initialized — wait a second and try again.');
+        }
+      } catch(e) { note('Could not fast-forward: ' + e.message); }
+    }
+  </script>
+
+  <!-- Timegate widget -->
+  <script>
+/* Timegate module wrapper and bootstrap. */
+(function () {
+  'use strict';
+
+  var INSTANCE_KEY = 'timegate-overhaul';
+  var LOADED_FLAG = '__timegateOverhaulLoaded';
+  var WRAPPED_FLAG = '__timegateOverhaulWrapped';
+  var SUSPEND_DATA_KEY = '__timegate_overhaul';
+
+  if (window[LOADED_FLAG]) { return; }
+  window[LOADED_FLAG] = true;
+
+  var DEFAULT_CONFIG = {
+    minRequiredMinutes: 0,
+    enforceCompletion: false,
+    idleTimeoutSeconds: 60,
+    backgroundGraceSeconds: 30,
+    countWhileMediaPlaying: true,
+    hideWhenComplete: false,
+    position: 'bottom-right',
+    debug: false,
+    storageMode: ''
+  };
+
+  var STATE_VERSION = 1;
+  var PERSIST_INTERVAL_MS = 5000;
+  var LOCK_TTL_MS = 15000;
+  var MAX_DELTA_MS = 5000;
+  var MEDIA_SCAN_INTERVAL_MS = 2000;
+
+  var config = null;
+  var state = null;
+  var lastPersistTs = 0;
+  var lastUiRender = '';
+  var lastActivityTs = Date.now();
+  var lastTickTs = Date.now();
+  var backgroundSinceTs = null;
+  var mediaPlaying = false;
+  var iframeDoc = null;
+  var isPrimaryTab = true;
+  var storage = null;
+  var apiAdapter = null;
+  var apiInitialized = false;
+  var pendingInitHydrate = false;
+  var replayingScorm = false;
+  var tabId = String(Math.random()).slice(2);
+  var lockKey = null;
+  var driverAdapter = null;
+
+  function log() {
+    if (!config || !config.debug) return;
+    var args = Array.prototype.slice.call(arguments);
+    args.unshift('[timegate]');
+    try { console.log.apply(console, args); } catch (e) {}
+  }
+
+  function resolveStorageMode() {
+    var mode = config && typeof config.storageMode === 'string' ? config.storageMode : '';
+    if (mode) return mode;
+    return 'localStorage';
+  }
+
+  function safeJsonParse(str) { try { return JSON.parse(str); } catch (e) { return null; } }
+  function safeJsonStringify(obj) { try { return JSON.stringify(obj); } catch (e) { return null; } }
+
+  function mergeConfig(base, override) {
+    var out = {}, key;
+    for (key in base) { if (Object.prototype.hasOwnProperty.call(base, key)) out[key] = base[key]; }
+    if (override) { for (key in override) { if (Object.prototype.hasOwnProperty.call(override, key)) out[key] = override[key]; } }
+    return out;
+  }
+
+  function getScriptBaseUrl() {
+    var script = document.currentScript;
+    if (!script) { var scripts = document.getElementsByTagName('script'); script = scripts[scripts.length - 1]; }
+    if (!script || !script.src) return '';
+    return script.src.replace(/\/[^/]*$/, '/');
+  }
+
+  function loadConfig(done) {
+    if (window.TIMEGATE_CONFIG && typeof window.TIMEGATE_CONFIG === 'object') {
+      done(mergeConfig(DEFAULT_CONFIG, window.TIMEGATE_CONFIG));
+      return;
+    }
+    var baseUrl = getScriptBaseUrl();
+    var configUrl = baseUrl ? baseUrl + 'timegate.config.json' : 'timegate-overhaul/timegate.config.json';
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', configUrl, true);
+      xhr.onreadystatechange = function () {
+        if (xhr.readyState !== 4) return;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          done(mergeConfig(DEFAULT_CONFIG, safeJsonParse(xhr.responseText) || {}));
+        } else {
+          done(mergeConfig(DEFAULT_CONFIG, {}));
+        }
+      };
+      xhr.send(null);
+    } catch (e) { done(mergeConfig(DEFAULT_CONFIG, {})); }
+  }
+
+  function formatTime(totalSeconds) {
+    var seconds = Math.max(0, Math.floor(totalSeconds));
+    var hours = Math.floor(seconds / 3600);
+    var minutes = Math.floor((seconds % 3600) / 60);
+    var secs = seconds % 60;
+    var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+    if (hours > 0) return hours + ':' + pad(minutes) + ':' + pad(secs);
+    return minutes + ':' + pad(secs);
+  }
+
+  function clampDelta(ms) {
+    if (ms < 0) return 0;
+    if (ms > MAX_DELTA_MS) return MAX_DELTA_MS;
+    return ms;
+  }
+
+  function createUi() {
+    var root = document.createElement('div');
+    root.id = 'timegate-root';
+    root.className = 'timegate--' + (config.position === 'bottom-left' ? 'bottom-left' : 'bottom-right');
+    var card = document.createElement('div');
+    card.className = 'timegate-card';
+    var close = document.createElement('button');
+    close.className = 'timegate-close'; close.type = 'button'; close.textContent = '✕';
+    close.onclick = function () { document.getElementById('timegate-root').style.display = 'none'; };
+    var label = document.createElement('div'); label.className = 'timegate-label'; label.textContent = 'Time remaining';
+    var time = document.createElement('div'); time.className = 'timegate-time'; time.textContent = '0:00';
+    var sub = document.createElement('div'); sub.className = 'timegate-sub'; sub.textContent = '';
+    card.appendChild(close); card.appendChild(label); card.appendChild(time); card.appendChild(sub);
+    root.appendChild(card);
+    root.setAttribute('aria-live', 'polite'); root.setAttribute('role', 'status');
+    document.body.appendChild(root);
+    return { root: root, close: close, label: label, time: time, sub: sub };
+  }
+
+  function updateUi(ui, opts) {
+    ui.time.textContent = opts.display;
+    ui.sub.textContent = opts.sub || '';
+    if (typeof opts.labelText === 'string') ui.label.textContent = opts.labelText;
+    ui.label.style.display = opts.showLabel ? '' : 'none';
+    var nextClass = 'timegate--' + (config.position === 'bottom-left' ? 'bottom-left' : 'bottom-right');
+    if (opts.paused) nextClass += ' timegate--paused';
+    if (opts.locked) nextClass += ' timegate--locked';
+    if (opts.complete) nextClass += ' timegate--complete';
+    if (opts.stateClass) nextClass += ' ' + opts.stateClass;
+    if (config.hideWhenComplete && opts.complete) nextClass += ' timegate--hidden';
+    if (ui.root.className !== nextClass) ui.root.className = nextClass;
+  }
+
+  function getLocalStorage() {
+    try { var ls = window.localStorage; ls.setItem('__tg_t__','1'); ls.removeItem('__tg_t__'); return ls; } catch (e) { return null; }
+  }
+
+  function findApi(win) { return null; } // No LMS in demo
+
+  function createApiAdapter() {
+    var info = findApi(window);
+    if (!info) { log('SCORM API not found'); return null; }
+    return null;
+  }
+
+  function createDriverAdapter() { return null; }
+  function getScormValue() { return ''; }
+  function setScormValue() { return false; }
+  function commitScorm() { return false; }
+
+  function buildCourseKey() {
+    var path = window.location && window.location.pathname ? window.location.pathname : '';
+    return (path || 'course') + '|' + (document.title || '');
+  }
+
+  function buildLearnerKey() { return 'demo-user'; }
+  function readSuspendData() { return null; }
+  function writeSuspendData() { return false; }
+
+  function createStorage() {
+    var ls = getLocalStorage();
+    if (ls) {
+      return {
+        type: 'localStorage',
+        get: function (key) { try { return ls.getItem(key); } catch (e) { return null; } },
+        set: function (key, value) { try { ls.setItem(key, value); return true; } catch (e) { return false; } }
+      };
+    }
+    return { type: 'memory', get: function () { return null; }, set: function () { return false; } };
+  }
+
+  function hydrateFromStorage() {
+    if (!storage) return false;
+    var raw = storage.get(state.storageKey);
+    if (!raw) return false;
+    var parsed = safeJsonParse(raw);
+    if (!parsed || parsed.version !== STATE_VERSION) return false;
+    var storedElapsed = parsed.elapsedSeconds || 0;
+    if (storedElapsed > state.elapsedSeconds) state.elapsedSeconds = storedElapsed;
+    if (!state.minMetAt && storedElapsed >= state.minRequiredSeconds) state.minMetAt = parsed.minMetAt || new Date().toISOString();
+    if (typeof parsed.courseCompleteSent === 'boolean') state.courseCompleteSent = parsed.courseCompleteSent;
+    log('Hydrated state', state);
+    return true;
+  }
+
+  function persistState(force) {
+    if (!storage) return;
+    var now = Date.now();
+    if (!force && now - lastPersistTs < PERSIST_INTERVAL_MS) return;
+    var payload = {
+      version: STATE_VERSION, courseKey: state.courseKey, learnerKey: state.learnerKey,
+      elapsedSeconds: Math.floor(state.elapsedSeconds || 0),
+      minRequiredSeconds: state.minRequiredSeconds, minMetAt: state.minMetAt,
+      lastTickTs: now, courseCompleteSent: !!state.courseCompleteSent,
+      courseCompletePending: !!state.courseCompletePending,
+      pendingScorm: state.pendingScorm || null, pendingDriverCalls: state.pendingDriverCalls || null,
+    };
+    var serialized = safeJsonStringify(payload);
+    if (!serialized) return;
+    var ok = storage.set(state.storageKey, serialized);
+    if (ok) lastPersistTs = now;
+  }
+
+  function getPauseReason() {
+    var now = Date.now();
+    var idleLimit = (config.idleTimeoutSeconds || 60) * 1000;
+    var backgroundGraceMs = (config.backgroundGraceSeconds || 0) * 1000;
+    var idle = now - lastActivityTs > idleLimit;
+    var isForeground = true;
+    if (document.hidden) isForeground = false;
+    if (typeof document.hasFocus === 'function' && !document.hasFocus()) isForeground = false;
+    if (!isPrimaryTab) isForeground = false;
+    if (!isForeground) {
+      if (backgroundSinceTs === null) backgroundSinceTs = now;
+      if (now - backgroundSinceTs > backgroundGraceMs) return 'background';
+    } else { backgroundSinceTs = null; }
+    if (idle) { if (config.countWhileMediaPlaying && mediaPlaying) return ''; return 'inactivity'; }
+    return '';
+  }
+
+  function isActive() { return !getPauseReason(); }
+
+  function updateLock() { isPrimaryTab = true; }
+  function updateMediaPlaying() { mediaPlaying = false; }
+  function trackActivity() { lastActivityTs = Date.now(); }
+
+  function attachActivityListeners(doc) {
+    if (!doc) return;
+    var events = ['mousemove','mousedown','keydown','touchstart','pointerdown','wheel'];
+    for (var i = 0; i < events.length; i++) doc.addEventListener(events[i], trackActivity, true);
+  }
+
+  function attachIframeListeners() {}
+
+  function syncCompletionFromLms() {}
+  function replayPendingScorm() {}
+  function replayPendingDriverCalls() {}
+
+  function computeUiState() {
+    var remaining = Math.max(0, state.minRequiredSeconds - state.elapsedSeconds);
+    var display = formatTime(remaining);
+    var pauseReason = getPauseReason();
+    var paused = !!pauseReason;
+    var locked = !!(config.enforceCompletion && !state.minMetAt);
+    var minMet = !!state.minMetAt;
+    var sub = '', labelText = 'Time remaining', showLabel = true;
+    var stateClass = 'timegate--state-normal';
+    if (minMet) {
+      display = 'Complete any remaining course content before exiting.';
+      labelText = 'Time Requirement Met'; showLabel = true; stateClass = 'timegate--state-complete';
+    } else if (paused) {
+      labelText = 'Idle Timeout'; sub = ''; stateClass = 'timegate--state-paused';
+    }
+    return { display: display, paused: paused, locked: locked, complete: minMet, sub: sub, labelText: labelText, showLabel: showLabel, stateClass: stateClass };
+  }
+
+  function tick(ui) {
+    var now = Date.now();
+    var delta = clampDelta(now - lastTickTs);
+    lastTickTs = now;
+    updateLock();
+    if (isActive()) state.elapsedSeconds += delta / 1000;
+    if (!state.minMetAt && state.elapsedSeconds >= state.minRequiredSeconds) {
+      state.minMetAt = new Date().toISOString();
+    }
+    persistState(false);
+    var uiState = computeUiState();
+    var signature = uiState.display + '|' + uiState.sub + '|' + (uiState.complete?'1':'0') + '|' + (uiState.paused?'1':'0') + '|' + (uiState.locked?'1':'0') + '|' + uiState.labelText + '|' + (uiState.showLabel?'1':'0') + '|' + uiState.stateClass;
+    if (signature !== lastUiRender) { updateUi(ui, uiState); lastUiRender = signature; }
+  }
+
+  function start(ui) {
+    attachActivityListeners(document);
+    document.addEventListener('visibilitychange', trackActivity, true);
+    window.addEventListener('focus', trackActivity, true);
+    setInterval(function () { updateMediaPlaying(); }, MEDIA_SCAN_INTERVAL_MS);
+    setInterval(function () { tick(ui); }, 1000);
+    window.addEventListener('pagehide', function () { persistState(true); });
+  }
+
+  function init() {
+    apiAdapter = null; driverAdapter = null;
+    storage = createStorage();
+    state = {
+      version: STATE_VERSION, courseKey: buildCourseKey(), learnerKey: buildLearnerKey(),
+      elapsedSeconds: 0, minRequiredSeconds: Math.max(0, Math.floor((config.minRequiredMinutes || 0) * 60)),
+      minMetAt: null, courseCompleteSent: false, courseCompletePending: false,
+      pendingScorm: null, pendingDriverCalls: null,
+    };
+    state.storageKey = INSTANCE_KEY + '.v1.' + state.courseKey + '.' + state.learnerKey;
+    lockKey = INSTANCE_KEY + '.lock.' + state.courseKey;
+    hydrateFromStorage();
+    if (!state.minMetAt && state.minRequiredSeconds === 0) state.minMetAt = new Date().toISOString();
+    var ui = createUi();
+    start(ui);
+    tick(ui);
+    log('Timegate demo initialized', state);
+  }
+
+  loadConfig(function (loaded) { config = loaded; init(); });
+})();
+  </script>
+
+</body>
+</html>
