@@ -1161,7 +1161,7 @@
     var stateClass = 'timegate--state-normal';
 
     if (minMet) {
-      display = 'Complete any remaining course content before exiting.';
+      display = 'Ensure you\'ve completed all course content before exiting.';
       labelText = 'Time Requirement Met';
       showLabel = true;
       stateClass = 'timegate--state-complete';
