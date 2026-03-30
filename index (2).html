@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Timegate Demo</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 48px 24px 80px;
+    }
+
+    .tg-wrap { width: 100%; max-width: 760px; }
+
+    .tg-header { text-align: center; margin-bottom: 1.5rem; }
+    .tg-title { font-size: 28px; font-weight: 600; margin-bottom: 6px; }
+    .tg-sub { font-size: 14px; color: #7d8590; }
+
+    .tg-controls { display: flex; gap: 8px; justify-content: center; margin-bottom: 1rem; flex-wrap: wrap; }
+    .tg-btn {
+      font-size: 13px; padding: 7px 18px;
+      border-radius: 6px; border: 1px solid rgba(255,255,255,0.15);
+      background: transparent; color: #e6edf3; cursor: pointer;
+      transition: background 0.15s;
+    }
+    .tg-btn:hover { background: rgba(255,255,255,0.08); }
+
+    .tg-course-area {
+      position: relative;
+      background: #161b22;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      padding: 32px;
+      min-height: 300px;
+      margin-bottom: 1.25rem;
+      overflow: hidden;
+    }
+    .tg-course-eyebrow {
+      font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+      color: #7d8590; margin-bottom: 14px;
+    }
+    .tg-course-title { font-size: 18px; font-weight: 600; margin-bottom: 12px; }
+    .tg-course-body { font-size: 14px; color: #7d8590; line-height: 1.7; max-width: 520px; }
+    .tg-progress-wrap { margin-top: 28px; }
+    .tg-progress-label { font-size: 12px; color: #7d8590; margin-bottom: 6px; }
+    .tg-progress-track { height: 4px; background: rgba(255,255,255,0.08); border-radius: 2px; }
+    .tg-progress-bar { height: 4px; background: #1a5a8a; border-radius: 2px; width: 40%; }
+
+    #tg-widget {
+      position: absolute; bottom: 16px; right: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .tg-widget-card {
+      border-radius: 10px; padding: 10px 12px;
+      min-width: 110px; text-align: right; position: relative;
+    }
+    .tg-widget-close {
+      position: absolute; top: -8px; right: -8px;
+      width: 18px; height: 18px; display: none;
+      align-items: center; justify-content: center;
+      border-radius: 50%; font-size: 9px; cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.3);
+      background: rgba(0,0,0,0.5); color: #fff;
+    }
+    .tg-widget-label { font-size: 11px; letter-spacing: 0.02em; opacity: 0.78; text-transform: uppercase; }
+    .tg-widget-time { font-size: 18px; font-weight: 700; margin-top: 2px; }
+    .tg-widget-sub { font-size: 11px; margin-top: 4px; opacity: 0.75; }
+
+    #tg-show {
+      position: absolute; bottom: 16px; right: 16px; display: none;
+      font-size: 11px; color: #7d8590;
+      background: #0d1117; border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 6px; padding: 5px 10px; cursor: pointer;
+    }
+    #tg-show:hover { color: #e6edf3; }
+
+    .state-normal .tg-widget-card { background: #003764; border: 1px solid #1a5a8a; color: #fff; }
+    .state-paused .tg-widget-card { background: #fa9014; border: 1px solid #c97010; color: #000; animation: tg-pulse 2s ease-in-out infinite; }
+    .state-complete .tg-widget-card {
+      background: #008542; border: 1px solid #00c463; color: #fff;
+      max-width: 180px; display: flex; flex-direction: column;
+      align-items: center; text-align: center; padding: 14px;
+    }
+    .state-complete .tg-widget-close { display: flex; }
+    .state-complete .tg-widget-time { font-size: 11px; font-weight: 400; line-height: 1.4; white-space: normal; opacity: 0.85; margin-top: 4px; }
+    .state-complete .tg-widget-sub { display: none; }
+    @keyframes tg-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.65; } }
+
+    .tg-config { display: flex; align-items: center; gap: 12px; }
+    .tg-config label { font-size: 13px; color: #7d8590; font-family: monospace; }
+    .tg-config input[type=number] {
+      width: 80px; font-family: monospace; font-size: 13px;
+      background: #161b22; border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 5px; color: #e6edf3; padding: 5px 8px;
+    }
+    .tg-config-note { font-size: 12px; color: #7d8590; }
+  </style>
+</head>
+<body>
+
+<div class="tg-wrap">
+
+  <div class="tg-header">
+    <div class="tg-title">Timegate</div>
+    <div class="tg-sub">SCORM completion timer — interactive demo</div>
+  </div>
+
+  <div class="tg-controls">
+    <button class="tg-btn" onclick="setState('normal')">Normal</button>
+    <button class="tg-btn" onclick="setState('paused')">Paused</button>
+    <button class="tg-btn" onclick="setState('complete')">Complete</button>
+    <button class="tg-btn" onclick="resetTimer()">Reset timer</button>
+  </div>
+
+  <div class="tg-course-area">
+    <div class="tg-course-eyebrow">Simulated course content</div>
+    <div class="tg-course-title">Security Industry Specialists — New Hire Orientation</div>
+    <div class="tg-course-body">Welcome to SIS. This course covers your responsibilities, uniform standards, and reporting procedures. Please review all sections before proceeding to the assessment. The timer in the lower right tracks your time on this course and must reach the required minimum before completion is recorded.</div>
+    <div class="tg-progress-wrap">
+      <div class="tg-progress-label">Course progress</div>
+      <div class="tg-progress-track"><div class="tg-progress-bar"></div></div>
+    </div>
+
+    <div id="tg-widget" class="state-normal">
+      <div class="tg-widget-card">
+        <button class="tg-widget-close" onclick="dismissWidget()">✕</button>
+        <div class="tg-widget-label" id="wlabel">Time remaining</div>
+        <div class="tg-widget-time" id="wtime">1:00</div>
+        <div class="tg-widget-sub" id="wsub"></div>
+      </div>
+    </div>
+    <button id="tg-show" onclick="showWidget()">Show timer</button>
+  </div>
+
+  <div class="tg-config">
+    <label>minRequiredMinutes</label>
+    <input type="number" id="cfg-min" value="1" min="0" step="0.5" oninput="updateConfig()" />
+    <span class="tg-config-note">Change and reset the timer to apply</span>
+  </div>
+
+</div>
+
+<script>
+  var elapsed = 0;
+  var minRequired = 60;
+  var currentState = 'normal';
+  var forcedState = null;
+
+  function dismissWidget() {
+    document.getElementById('tg-widget').style.display = 'none';
+    document.getElementById('tg-show').style.display = 'block';
+  }
+
+  function showWidget() {
+    document.getElementById('tg-widget').style.display = '';
+    document.getElementById('tg-show').style.display = 'none';
+  }
+
+  function setState(s) {
+    forcedState = s;
+    currentState = s;
+    showWidget();
+    renderWidget();
+  }
+
+  function renderWidget() {
+    var w = document.getElementById('tg-widget');
+    w.className = 'state-' + currentState;
+    if (currentState === 'normal') {
+      document.getElementById('wlabel').textContent = 'Time remaining';
+      document.getElementById('wtime').textContent = formatTime(Math.max(0, minRequired - elapsed));
+      document.getElementById('wsub').textContent = '';
+    } else if (currentState === 'paused') {
+      document.getElementById('wlabel').textContent = 'Idle timeout';
+      document.getElementById('wtime').textContent = formatTime(Math.max(0, minRequired - elapsed));
+      document.getElementById('wsub').textContent = '';
+    } else {
+      document.getElementById('wlabel').textContent = 'Time requirement met';
+      document.getElementById('wtime').textContent = 'Complete any remaining course content before exiting.';
+      document.getElementById('wsub').textContent = '';
+    }
+  }
+
+  function formatTime(s) {
+    s = Math.max(0, Math.floor(s));
+    return Math.floor(s / 60) + ':' + (s % 60 < 10 ? '0' : '') + s % 60;
+  }
+
+  function resetTimer() {
+    elapsed = 0;
+    forcedState = null;
+    currentState = 'normal';
+    showWidget();
+    renderWidget();
+  }
+
+  function updateConfig() {
+    minRequired = (parseFloat(document.getElementById('cfg-min').value) || 1) * 60;
+  }
+
+  setInterval(function () {
+    if (forcedState === 'paused' || forcedState === 'complete') return;
+    elapsed++;
+    if (elapsed >= minRequired && currentState !== 'complete') {
+      currentState = 'complete';
+      forcedState = 'complete';
+    }
+    renderWidget();
+  }, 1000);
+
+  renderWidget();
+</script>
+
+</body>
+</html>
