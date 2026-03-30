@@ -1,0 +1,11 @@
+{
+  "minRequiredMinutes": 1,
+  "enforceCompletion": true,
+  "idleTimeoutSeconds": 60,
+  "backgroundGraceSeconds": 30,
+  "countWhileMediaPlaying": true,
+  "hideWhenComplete": false,
+  "position": "bottom-right",
+  "debug": true,
+  "storageMode": "dual"
+}

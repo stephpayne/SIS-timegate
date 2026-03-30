@@ -1,0 +1,140 @@
+#timegate-root {
+  position: fixed;
+  z-index: 2147483647;
+  pointer-events: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: #fff;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  right: calc(16px + env(safe-area-inset-right));
+}
+
+#timegate-root.timegate--bottom-left {
+  left: calc(16px + env(safe-area-inset-left));
+  right: auto;
+}
+
+#timegate-root.timegate--hidden {
+  display: none;
+}
+
+.timegate-card {
+  background: rgba(20, 20, 20, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  border-radius: 10px;
+  position: relative;
+  padding: 10px 12px;
+  min-width: 0;
+  text-align: right;
+  backdrop-filter: blur(6px);
+}
+
+.timegate-close {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 18px;
+  height: 18px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+  font-size: 9px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  pointer-events: all;
+}
+
+.timegate-label {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  opacity: 0.78;
+  text-transform: uppercase;
+}
+
+.timegate-time {
+  font-size: 18px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.timegate-sub {
+  font-size: 11px;
+  margin-top: 4px;
+  opacity: 0.75;
+  display: block;
+}
+
+.timegate--state-normal .timegate-card {
+  background: #003764;
+  border-color: #1a5a8a;
+  color: #ffffff;
+}
+
+.timegate--state-paused .timegate-card {
+  background: #fa9014;
+  border-color: #c97010;
+  color: #000000;
+  animation: timegate-pulse 2s ease-in-out infinite;
+}
+
+.timegate--state-complete .timegate-card {
+  background: #008542;
+  border-color: #00c463;
+  color: #ffffff;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 14px;
+  max-width: 180px;
+}
+
+.timegate--state-complete .timegate-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  opacity: 0.78;
+  text-transform: uppercase;
+  display: block;
+}
+
+.timegate--state-complete .timegate-time {
+  font-size: 11px;
+  font-weight: 400;
+  margin-top: 4px;
+  line-height: 1.4;
+  white-space: normal;
+  opacity: 0.85;
+}
+
+.timegate--state-complete .timegate-sub {
+  display: none;
+}
+
+.timegate--state-complete .timegate-close {
+  display: flex;
+}
+
+@keyframes timegate-pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.65; }
+  100% { opacity: 1; }
+}
+
+@media (max-width: 480px) {
+  .timegate-card {
+    min-width: 100px;
+    padding: 8px 10px;
+  }
+
+  .timegate-time {
+    font-size: 16px;
+  }
+}
