@@ -2,6 +2,8 @@
 
 Timegate is a SCORM add-on that injects a timer overlay into a course and can optionally prevent the course from reporting completion until a minimum amount of time has been spent in the course.
 
+Demo link: https://stephpayne.github.io/SIS-timegate/demo.html
+
 In plain terms:
 
 - it adds a visible timer to the course
