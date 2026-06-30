@@ -1,0 +1,10 @@
+# Normalize line endings on commit
+* text=auto
+
+# Windows scripts use CRLF
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Unix shell scripts must stay LF (CRLF breaks the shebang/interpreter)
+*.sh       text eol=lf
+*.command  text eol=lf

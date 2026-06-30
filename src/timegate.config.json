@@ -1,0 +1,22 @@
+{
+  // Per-course setting
+  "minRequiredMinutes": 1,                 // required floor time before completion
+
+  // Shared defaults — change only with an understanding of the runtime
+  // behavior (see MAINTAINING.md).
+  "enforceCompletion": true,               // block completion until the floor time is met
+  "inactivityForceExitEnabled": true,      // close the session after long inactivity
+  "inactivityForceExitMinutes": 5,         // total idle minutes before force-close
+  "inactivityWarningSeconds": 30,          // how long the firm countdown toast shows
+  "gentleNudgeEnabled": true,              // soft "still here?" prompt before the countdown
+  "gentleNudgeSeconds": 60,                // how long the gentle nudge shows before escalating
+  "countWhileMediaPlaying": true,          // count video/audio playback as activity
+  "disableVideoSkip": true,                // stop learners scrubbing past unwatched video
+  "idleTimeoutSeconds": 120,               // pause the timer after this much idle
+  "backgroundGraceSeconds": 30,            // keep counting briefly when the tab loses focus
+  "launchModalEnabled": true,              // show the "I understand" modal on launch
+  "hideWhenComplete": false,               // hide the timer once the requirement is met
+  "position": "bottom-right",              // bottom-right | bottom-left
+  "storageMode": "dual",                   // localStorage | suspend_data | dual
+  "debug": false                           // console logging — turn off for production
+}

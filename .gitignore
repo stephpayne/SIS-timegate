@@ -1,0 +1,7 @@
+# Build artifacts
+*-timegate.zip
+*.tmp
+
+# OS noise
+.DS_Store
+Thumbs.db

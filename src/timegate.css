@@ -1,0 +1,383 @@
+/* Timegate — styles for timer overlay, launch modal, inactivity warning, walk-back overlay. */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap');
+
+#timegate-root {
+  position: fixed;
+  z-index: 2147483647;
+  pointer-events: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: #fff;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  right: calc(16px + env(safe-area-inset-right));
+}
+
+#timegate-root.timegate--bottom-left {
+  left: calc(16px + env(safe-area-inset-left));
+  right: auto;
+}
+
+#timegate-root.timegate--hidden {
+  display: none;
+}
+
+.timegate-card {
+  background: rgba(20, 20, 20, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  border-radius: 10px;
+  position: relative;
+  padding: 10px 12px;
+  min-width: 0;
+  text-align: right;
+  backdrop-filter: blur(6px);
+}
+
+.timegate-close {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 18px;
+  height: 18px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+  font-size: 9px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  pointer-events: all;
+}
+
+.timegate-label {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  opacity: 0.78;
+  text-transform: uppercase;
+}
+
+.timegate-time {
+  font-size: 18px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.timegate-sub {
+  font-size: 11px;
+  margin-top: 4px;
+  opacity: 0.75;
+  display: block;
+}
+
+.timegate--state-normal .timegate-card {
+  background: #003764;
+  border-color: #1a5a8a;
+  color: #ffffff;
+}
+
+.timegate--state-paused .timegate-card {
+  background: #fa9014;
+  border-color: #c97010;
+  color: #000000;
+  animation: timegate-pulse 2s ease-in-out infinite;
+}
+
+.timegate--state-complete .timegate-card {
+  background: #008542;
+  border-color: #00c463;
+  color: #ffffff;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 14px;
+  max-width: 180px;
+}
+
+.timegate--state-complete .timegate-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  opacity: 0.78;
+  text-transform: uppercase;
+  display: block;
+}
+
+.timegate--state-complete .timegate-time {
+  font-size: 11px;
+  font-weight: 400;
+  margin-top: 4px;
+  line-height: 1.4;
+  white-space: normal;
+  opacity: 0.85;
+}
+
+.timegate--state-complete .timegate-sub {
+  display: none;
+}
+
+.timegate--state-complete .timegate-close {
+  display: flex;
+}
+
+@keyframes timegate-pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.65; }
+  100% { opacity: 1; }
+}
+
+@media (max-width: 480px) {
+  .timegate-card {
+    min-width: 100px;
+    padding: 8px 10px;
+  }
+
+  .timegate-time {
+    font-size: 16px;
+  }
+}
+
+/* ---- Launch acknowledgment modal ---- */
+.timegate-launch-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  background: rgba(0, 0, 0, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  backdrop-filter: blur(2px);
+}
+
+.timegate-launch-card {
+  background: #ffffff;
+  color: #1a1a1a;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2), 0 24px 60px rgba(0, 0, 0, 0.5);
+  max-width: 520px;
+  width: 100%;
+  padding: 28px 28px 24px;
+  text-align: center;
+}
+
+.timegate-launch-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #003764;
+  margin-bottom: 14px;
+}
+
+.timegate-launch-body p {
+  font-size: 15px;
+  line-height: 1.55;
+  margin: 0 0 12px;
+  color: #2a2a2a;
+}
+
+.timegate-launch-body p:last-child {
+  margin-bottom: 20px;
+}
+
+.timegate-launch-button {
+  background: #003764;
+  color: #ffffff;
+  border: 1px solid #003764;
+  border-radius: 6px;
+  padding: 10px 28px;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  cursor: pointer;
+  display: block;
+  margin: 0 auto;
+  transition: background 0.15s ease;
+}
+
+.timegate-launch-button:hover,
+.timegate-launch-button:focus {
+  background: #00497f;
+  outline: none;
+}
+
+@media (max-width: 480px) {
+  .timegate-launch-card {
+    padding: 20px;
+  }
+  .timegate-launch-title {
+    font-size: 18px;
+  }
+  .timegate-launch-body p {
+    font-size: 14px;
+  }
+}
+
+/* ---- Modal preview timer ---- */
+#timegate-modal-preview {
+  position: fixed;
+  z-index: 2147483647;
+  pointer-events: none;
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: #fff;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  right: calc(16px + env(safe-area-inset-right));
+}
+
+#timegate-modal-preview.timegate--bottom-left {
+  left: calc(16px + env(safe-area-inset-left));
+  right: auto;
+}
+
+.timegate-preview-card {
+  background: #003764;
+  border: 1px solid #1a5a8a;
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  padding: 10px 12px;
+  text-align: right;
+  backdrop-filter: blur(6px);
+  animation: timegate-preview-pulse 2s ease-in-out infinite;
+}
+
+@keyframes timegate-preview-pulse {
+  0%   { opacity: 0.55; transform: scale(1); }
+  50%  { opacity: 1;    transform: scale(1.04); }
+  100% { opacity: 0.55; transform: scale(1); }
+}
+
+/* ---- Inactivity warning toast ---- */
+.timegate-warning {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2147483646;
+  background: #f59500;
+  color: #1a1a1a;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2), 0 24px 60px rgba(0, 0, 0, 0.5);
+  padding: 28px 32px 24px;
+  min-width: 320px;
+  max-width: 420px;
+  text-align: center;
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  animation: timegate-warning-pulse 1.8s ease-in-out infinite;
+}
+
+.timegate-warning-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+
+.timegate-warning-msg {
+  font-size: 15px;
+  line-height: 1.55;
+  opacity: 0.92;
+  margin-bottom: 10px;
+}
+
+.timegate-warning-msg strong {
+  font-weight: 700;
+}
+
+.timegate-warning-sub {
+  font-size: 13px;
+  line-height: 1.4;
+  opacity: 0.75;
+}
+
+@keyframes timegate-warning-pulse {
+  0%   { box-shadow: 0 4px 14px rgba(0,0,0,0.2), 0 24px 60px rgba(0,0,0,0.5), 0 0 0 0   rgba(245,149,0,0.4); }
+  60%  { box-shadow: 0 4px 14px rgba(0,0,0,0.2), 0 24px 60px rgba(0,0,0,0.5), 0 0 0 16px rgba(245,149,0,0); }
+  100% { box-shadow: 0 4px 14px rgba(0,0,0,0.2), 0 24px 60px rgba(0,0,0,0.5), 0 0 0 0   rgba(245,149,0,0); }
+}
+
+/* ---- Gentle "still here?" nudge (first stage, calm) ---- */
+.timegate-nudge {
+  position: fixed;
+  top: 75%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2147483645;
+  background: #ffffff;
+  color: #1a1a1a;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12), 0 12px 32px rgba(0, 0, 0, 0.16);
+  padding: 16px 22px;
+  max-width: 360px;
+  text-align: center;
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.timegate-nudge-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.timegate-nudge-sub {
+  font-size: 13px;
+  line-height: 1.45;
+  opacity: 0.7;
+}
+
+/* ---- Walk-back overlay (post force-end) ---- */
+.timegate-walkback {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  background: rgba(10, 10, 10, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.timegate-walkback-card {
+  background: #ffffff;
+  color: #1a1a1a;
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  max-width: 520px;
+  width: 100%;
+  padding: 32px;
+  text-align: center;
+  border-top: 6px solid #fa9014;
+}
+
+.timegate-walkback-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #003764;
+  margin-bottom: 14px;
+}
+
+.timegate-walkback-msg {
+  font-size: 15px;
+  line-height: 1.55;
+  margin: 0;
+  color: #2a2a2a;
+}
+
+@media (max-width: 480px) {
+  .timegate-walkback-card {
+    padding: 24px 20px;
+  }
+  .timegate-walkback-title {
+    font-size: 19px;
+  }
+  .timegate-walkback-msg {
+    font-size: 14px;
+  }
+}
