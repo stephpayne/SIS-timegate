@@ -266,9 +266,9 @@ fi
 
 cp -f "$GENERATED_ZIP" "$OUTPUT_ZIP"
 
-if ! unzip -l "$OUTPUT_ZIP" | grep -q "timegate/timegate.js" || \
-   ! unzip -l "$OUTPUT_ZIP" | grep -q "timegate/timegate.css" || \
-   ! unzip -l "$OUTPUT_ZIP" | grep -q "timegate/timegate.config.json"; then
+if ! unzip -p "$OUTPUT_ZIP" "timegate/timegate.js" >/dev/null 2>&1 || \
+   ! unzip -p "$OUTPUT_ZIP" "timegate/timegate.css" >/dev/null 2>&1 || \
+   ! unzip -p "$OUTPUT_ZIP" "timegate/timegate.config.json" >/dev/null 2>&1; then
   rm -f "$OUTPUT_ZIP"
   show_error "The output ZIP was missing required Timegate files, so it was removed. No usable package was created."
   exit 1
