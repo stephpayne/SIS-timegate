@@ -529,6 +529,20 @@
     if (!timerStarted) return;
 
     /*
+     * The inactivity clock only runs while the tab is visible. In a hidden
+     * tab the nudge and countdown warnings cannot be seen, so force-exiting
+     * from there reads as a crash when the learner returns. Seat time is
+     * already paused for hidden tabs (background pause), so pausing the
+     * force-exit clock here gives up no seat-time protection.
+     */
+    if (document.hidden) {
+      lastActivityTs = Date.now();
+      hideWarning();
+      hideGentleNudge();
+      return;
+    }
+
+    /*
      * Playing media counts as activity. A learner watching a video does not
      * generate mouse/keyboard events, so without this they would be force-
      * exited mid-playback. While media plays we treat the learner as active:

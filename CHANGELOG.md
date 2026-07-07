@@ -4,6 +4,15 @@ All notable changes to Timegate are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-07-07
+
+### Fixed
+- The inactivity force-exit clock no longer runs while the course tab is hidden
+  (e.g. the learner switched to another window). The nudge and countdown
+  warnings are invisible in a hidden tab, so learners were being exited with no
+  visible warning and reported it as a crash. Seat time was already paused for
+  hidden tabs, so this change gives up no seat-time protection.
+
 ## [1.0.0] - 2026-06-30
 
 ### Added
