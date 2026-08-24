@@ -8,6 +8,9 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 RUNTIME_SOURCE="$PROJECT_ROOT/src"
 CORE_INSTALLER="$SCRIPT_DIR/install-timegate.sh"
+CONFIG_VALIDATOR="$SCRIPT_DIR/timegate_config.py"
+INSTRUMENTER="$SCRIPT_DIR/instrument_package.py"
+COURSE_DESCRIPTOR="$SCRIPT_DIR/course_descriptor.py"
 
 show_error() {
   osascript - "$1" <<'APPLESCRIPT'
@@ -61,6 +64,128 @@ APPLESCRIPT
   done
 }
 
+ask_max_minutes() {
+  local minimum="$1"
+  while true; do
+    local value
+    value="$(osascript <<'APPLESCRIPT'
+try
+  set response to display dialog "Optional maximum active time in minutes (leave blank for no maximum):" with title "Timegate Installer" default answer "" buttons {"Cancel", "Continue"} default button "Continue"
+  return text returned of response
+on error number -128
+  return "__CANCEL__"
+end try
+APPLESCRIPT
+)"
+    if [ "$value" = "__CANCEL__" ]; then
+      return 1
+    fi
+    if [ -z "$value" ]; then
+      printf 'null'
+      return 0
+    fi
+    if printf '%s' "$value" | grep -Eq '^[0-9]+$' && \
+       [ "$value" -gt "$minimum" ] && [ "$value" -le 600 ]; then
+      printf '%s' "$value"
+      return 0
+    fi
+    show_error "Enter a whole number greater than the $minimum-minute floor and no more than 600, or leave it blank for no maximum."
+  done
+}
+
+ask_telemetry_endpoint() {
+  while true; do
+    local value
+    value="$(osascript <<'APPLESCRIPT'
+try
+  set response to display dialog "Telemetry webhook endpoint:" with title "Timegate Installer" default answer "https://" buttons {"Cancel", "Continue"} default button "Continue"
+  return text returned of response
+on error number -128
+  return ""
+end try
+APPLESCRIPT
+)"
+    if [ -z "$value" ]; then
+      return 1
+    fi
+
+    if printf '%s' "$value" | grep -Eq '^https://[^/?#]+(/[^?#]*)?$|^http://(localhost|127\.0\.0\.1)(:[0-9]+)?(/[^?#]*)?$'; then
+      printf '%s' "$value"
+      return 0
+    fi
+    show_error "Use a complete HTTPS URL without a query or fragment. HTTP is accepted only for localhost testing."
+  done
+}
+
+ask_source_key_id() {
+  while true; do
+    local value
+    value="$(osascript <<'APPLESCRIPT'
+try
+  set response to display dialog "Observability source-key ID:" with title "Timegate Installer" default answer "rise-pilot" buttons {"Cancel", "Continue"} default button "Continue"
+  return text returned of response
+on error number -128
+  return ""
+end try
+APPLESCRIPT
+)"
+    if [ -z "$value" ]; then
+      return 1
+    fi
+    if printf '%s' "$value" | grep -Eq '^[A-Za-z0-9._:@/-]{1,64}$'; then
+      printf '%s' "$value"
+      return 0
+    fi
+    show_error "Use 1–64 letters, numbers, dots, underscores, colons, @ signs, slashes, or hyphens."
+  done
+}
+
+ask_pilot_token() {
+  while true; do
+    local value
+    value="$(osascript <<'APPLESCRIPT'
+try
+  set response to display dialog "Course-scoped pilot token:" with title "Timegate Installer" default answer "" hidden answer true buttons {"Cancel", "Continue"} default button "Continue"
+  return text returned of response
+on error number -128
+  return ""
+end try
+APPLESCRIPT
+)"
+    if [ -z "$value" ]; then
+      return 1
+    fi
+    if [ "${#value}" -ge 16 ] && [ "${#value}" -le 512 ]; then
+      printf '%s' "$value"
+      return 0
+    fi
+    show_error "The pilot token must contain 16–512 characters."
+  done
+}
+
+ask_paycom_course_id() {
+  while true; do
+    local value
+    value="$(osascript <<'APPLESCRIPT'
+try
+  set response to display dialog "Paycom Course ID:" with title "Timegate Installer" default answer "" buttons {"Cancel", "Continue"} default button "Continue"
+  return text returned of response
+on error number -128
+  return ""
+end try
+APPLESCRIPT
+)"
+    if [ -z "$value" ]; then
+      return 1
+    fi
+    if printf '%s' "$value" | grep -Eq '^[A-Za-z0-9._:@/-]{1,128}$'; then
+      printf '%s' "$value"
+      return 0
+    fi
+    show_error "Use 1–128 letters, numbers, dots, underscores, colons, @ signs, slashes, or hyphens."
+  done
+}
+
 choose_settings_mode() {
   osascript <<'APPLESCRIPT'
 try
@@ -75,10 +200,12 @@ APPLESCRIPT
 write_default_config() {
   local config_path="$1"
   local minutes="$2"
+  local max_minutes="$3"
 
   cat > "$config_path" <<EOF
 {
   "minRequiredMinutes": $minutes,
+  "maxAllowedMinutes": $max_minutes,
   "enforceCompletion": true,
   "inactivityForceExitEnabled": true,
   "inactivityForceExitMinutes": 5,
@@ -114,14 +241,27 @@ normalize_smart_quotes() {
 }
 
 confirm_build() {
-  osascript - "$1" "$2" "$3" <<'APPLESCRIPT'
+  osascript - "$1" "$2" "$3" "$4" "$5" "$6" "$7" <<'APPLESCRIPT'
 on run argv
   set theMinutes to item 1 of argv
-  set theSettings to item 2 of argv
-  set theOutput to item 3 of argv
+  set theMaximum to item 2 of argv
+  set theSettings to item 3 of argv
+  set theOutput to item 4 of argv
+  set theEndpoint to item 5 of argv
+  set theSourceKey to item 6 of argv
+  set thePaycomCourse to item 7 of argv
   set msg to "Ready to create the Timegate package."
   set msg to msg & return & return & "Required floor time: " & theMinutes & " minutes"
+  if theMaximum is "null" then
+    set msg to msg & return & "Maximum active time: none"
+  else
+    set msg to msg & return & "Maximum active time: " & theMaximum & " minutes"
+  end if
   set msg to msg & return & "Settings: " & theSettings
+  set msg to msg & return & "Telemetry endpoint: " & theEndpoint
+  set msg to msg & return & "Source-key ID: " & theSourceKey
+  set msg to msg & return & "Paycom Course ID: " & thePaycomCourse
+  set msg to msg & return & "Pilot token: configured (hidden)"
   set msg to msg & return & return & "A new file will be created here:" & return & theOutput
   set msg to msg & return & return & "Your original SCORM ZIP is not changed."
   set msg to msg & return & return & "Create it now?"
@@ -135,8 +275,14 @@ end run
 APPLESCRIPT
 }
 
-if [ ! -f "$RUNTIME_SOURCE/timegate.js" ] || [ ! -f "$CORE_INSTALLER" ]; then
-  show_error "This launcher must stay in the Timegate project installer folder. The required src or installer files are missing."
+if [ ! -f "$RUNTIME_SOURCE/timegate.js" ] || \
+   [ ! -f "$RUNTIME_SOURCE/observability/host.js" ] || \
+   [ ! -f "$RUNTIME_SOURCE/observability/content-probe.js" ] || \
+   [ ! -f "$CONFIG_VALIDATOR" ] || \
+   [ ! -f "$INSTRUMENTER" ] || \
+   [ ! -f "$COURSE_DESCRIPTOR" ] || \
+   [ ! -f "$CORE_INSTALLER" ]; then
+  show_error "This launcher must stay in the Timegate project installer folder. Required Timegate or observability files are missing."
   exit 1
 fi
 
@@ -153,7 +299,21 @@ case "$INPUT_ZIP" in
     ;;
 esac
 
+INPUT_FILENAME="$(basename "$INPUT_ZIP")"
+INPUT_STEM="${INPUT_FILENAME%.*}"
+case "$INPUT_STEM" in
+  *-timegate)
+    show_error "Choose the original Rise SCORM export, not an existing -timegate ZIP. This keeps the original package unchanged and avoids layered instrumentation."
+    exit 1
+    ;;
+esac
+
 MINUTES="$(ask_minutes)" || exit 0
+MAX_ALLOWED_MINUTES="$(ask_max_minutes "$MINUTES")" || exit 0
+TELEMETRY_ENDPOINT="$(ask_telemetry_endpoint)" || exit 0
+SOURCE_KEY_ID="$(ask_source_key_id)" || exit 0
+PILOT_TOKEN="$(ask_pilot_token)" || exit 0
+PAYCOM_COURSE_ID="$(ask_paycom_course_id)" || exit 0
 MODE="$(choose_settings_mode)"
 if [ "$MODE" = "Cancel" ]; then
   exit 0
@@ -191,10 +351,8 @@ fi
 
 MANIFEST_PATH="$(find "$EXTRACT_DIR" -type f -name "imsmanifest.xml" -print -quit)"
 SCORM_ROOT="$(dirname "$MANIFEST_PATH")"
-PACKAGE_TIMEGATE_DIR="$SCORM_ROOT/timegate"
-PACKAGE_CONFIG="$PACKAGE_TIMEGATE_DIR/timegate.config.json"
-mkdir -p "$PACKAGE_TIMEGATE_DIR"
-write_default_config "$PACKAGE_CONFIG" "$MINUTES"
+PACKAGE_CONFIG="$TEMP_ROOT/timegate.config.json"
+write_default_config "$PACKAGE_CONFIG" "$MINUTES" "$MAX_ALLOWED_MINUTES"
 
 if [ "$MODE" = "Advanced Settings..." ]; then
   show_info "TextEdit will open the advanced settings. Change only values you understand, then save and close the TextEdit window. Timegate checks the file before packaging."
@@ -227,15 +385,17 @@ APPLESCRIPT
 fi
 
 INPUT_DIR="$(dirname "$INPUT_ZIP")"
-INPUT_FILENAME="$(basename "$INPUT_ZIP")"
-INPUT_STEM="${INPUT_FILENAME%.*}"
-case "$INPUT_STEM" in
-  *-timegate) OUTPUT_STEM="$INPUT_STEM" ;;
-  *) OUTPUT_STEM="$INPUT_STEM-timegate" ;;
-esac
+OUTPUT_STEM="$INPUT_STEM-timegate"
 OUTPUT_ZIP="$INPUT_DIR/$OUTPUT_STEM.zip"
 
-DECISION="$(confirm_build "$MINUTES" "$SETTINGS_LABEL" "$OUTPUT_ZIP")"
+DECISION="$(confirm_build \
+  "$MINUTES" \
+  "$MAX_ALLOWED_MINUTES" \
+  "$SETTINGS_LABEL" \
+  "$OUTPUT_ZIP" \
+  "$TELEMETRY_ENDPOINT" \
+  "$SOURCE_KEY_ID" \
+  "$PAYCOM_COURSE_ID")"
 if [ "$DECISION" != "Create Package" ]; then
   exit 0
 fi
@@ -253,7 +413,13 @@ APPLESCRIPT
   fi
 fi
 
-if ! "$CORE_INSTALLER" "$SCORM_ROOT"; then
+if ! SCORM_TELEMETRY_ENDPOINT="$TELEMETRY_ENDPOINT" \
+     SCORM_SOURCE_KEY_ID="$SOURCE_KEY_ID" \
+     SCORM_PILOT_TOKEN="$PILOT_TOKEN" \
+     PAYCOM_COURSE_ID="$PAYCOM_COURSE_ID" \
+     "$CORE_INSTALLER" \
+       --timegate-config "$PACKAGE_CONFIG" \
+       "$SCORM_ROOT"; then
   show_error "Timegate could not be added to this package. No output ZIP was created."
   exit 1
 fi
@@ -268,13 +434,19 @@ cp -f "$GENERATED_ZIP" "$OUTPUT_ZIP"
 
 if ! unzip -p "$OUTPUT_ZIP" "timegate/timegate.js" >/dev/null 2>&1 || \
    ! unzip -p "$OUTPUT_ZIP" "timegate/timegate.css" >/dev/null 2>&1 || \
-   ! unzip -p "$OUTPUT_ZIP" "timegate/timegate.config.json" >/dev/null 2>&1; then
+   ! unzip -p "$OUTPUT_ZIP" "timegate/timegate.config.json" >/dev/null 2>&1 || \
+   ! unzip -p "$OUTPUT_ZIP" "timegate/observability/host.js" >/dev/null 2>&1 || \
+   ! unzip -p "$OUTPUT_ZIP" "timegate/observability/content-probe.js" >/dev/null 2>&1 || \
+   ! unzip -p "$OUTPUT_ZIP" "scormdriver/indexAPI.html" | grep -q 'src="../timegate/timegate.js"' || \
+   ! unzip -p "$OUTPUT_ZIP" "scormdriver/indexAPI.html" | grep -q 'href="../timegate/timegate.css"' || \
+   ! unzip -p "$OUTPUT_ZIP" "scormdriver/indexAPI.html" | grep -q 'data-sis-observability="host"' || \
+   ! unzip -p "$OUTPUT_ZIP" "scormcontent/index.html" | grep -q 'data-sis-observability="content-probe"'; then
   rm -f "$OUTPUT_ZIP"
   show_error "The output ZIP was missing required Timegate files, so it was removed. No usable package was created."
   exit 1
 fi
 
-show_info "Timegate is installed.
+show_info "Timegate and SCORM observability are installed.
 
 Created:
 $OUTPUT_ZIP
