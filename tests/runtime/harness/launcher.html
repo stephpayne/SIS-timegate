@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Local LMS Launch Mode Harness</title>
+    <style>
+      body { font: 16px/1.4 system-ui, sans-serif; margin: 2rem; }
+      button, select { margin-right: .5rem; padding: .6rem .9rem; }
+      iframe { border: 1px solid #999; display: block; height: 48rem; margin-top: 1rem; max-width: 100%; width: 100%; }
+    </style>
+  </head>
+  <body>
+    <h1>Local LMS launcher</h1>
+    <label>
+      Launch mode
+      <select id="mode">
+        <option value="iframe">iframe</option>
+        <option value="popup">popup</option>
+      </select>
+    </label>
+    <button id="launch" type="button">Launch course</button>
+    <p id="status">The course window contains the SCORM call and telemetry timeline.</p>
+    <div id="target"></div>
+    <script>
+      (function () {
+        var requested = new URLSearchParams(location.search).get('mode');
+        var mode = document.getElementById('mode');
+        if (requested === 'popup' || requested === 'iframe') mode.value = requested;
+        document.getElementById('launch').onclick = function () {
+          var target = document.getElementById('target');
+          var courseUrl = 'index.html' + window.location.search;
+          target.textContent = '';
+          if (mode.value === 'popup') {
+            window.open(courseUrl, 'scorm_observability_harness', 'width=1200,height=850');
+            document.getElementById('status').textContent =
+              'Popup launched; its Timeline panel captures all SCORM calls and snapshots.';
+          } else {
+            var frame = document.createElement('iframe');
+            frame.title = 'SCORM course driver';
+            frame.src = courseUrl;
+            target.appendChild(frame);
+            document.getElementById('status').textContent =
+              'Iframe launched; use its Timeline panel below.';
+          }
+        };
+      })();
+    </script>
+  </body>
+</html>
