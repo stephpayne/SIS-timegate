@@ -1,0 +1,67 @@
+name: Timegate reliability
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-and-packaging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:all
+      - name: Validate scripts
+        run: |
+          node --check src/timegate.js
+          node --check src/observability/host.js
+          node --check src/observability/content-probe.js
+          bash -n installer/install-timegate.sh
+          bash -n installer/Timegate-Installer.command
+
+  windows-installer-syntax:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Parse PowerShell installers
+        shell: pwsh
+        run: |
+          $files = @(
+            'installer/Timegate-Installer.ps1',
+            'installer/install-timegate.ps1',
+            'installer/timegate_config.ps1'
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file),
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "${file}: $_" }
+              exit 1
+            }
+          }
+      - name: Exercise SCORM 2004 packaging
+        run: >-
+          python -B -m unittest discover -s installer/tests
+          -p test_packaging.py -k scorm_2004 -v
