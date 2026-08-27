@@ -895,6 +895,63 @@ class PackageInstrumentationTests(unittest.TestCase):
             output = root.with_name(f"{root.name}-timegate.zip")
             self.assertTrue(output.is_file())
 
+    def test_raycast_packager_creates_timegate_only_zip(self) -> None:
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell is not installed")
+        if shutil.which("zip") is None or shutil.which("unzip") is None:
+            self.skipTest("zip and unzip are required")
+
+        with tempfile.TemporaryDirectory() as directory:
+            temp_root = Path(directory)
+            package_root = temp_root / "synthetic-course"
+            package_root.mkdir()
+            _write_synthetic_package(package_root)
+            input_zip = temp_root / "synthetic-course.zip"
+            with zipfile.ZipFile(input_zip, "w") as archive:
+                for path in package_root.rglob("*"):
+                    if path.is_file():
+                        archive.write(path, path.relative_to(package_root))
+
+            environment = {
+                **os.environ,
+                "TIMEGATE_PROJECT_ROOT": str(PROJECT_ROOT),
+                "TIMEGATE_INPUT_ZIP": str(input_zip),
+                "TIMEGATE_MINUTES": "20",
+                "TIMEGATE_MAX_MINUTES": "75",
+            }
+            result = subprocess.run(
+                [str(INSTALLER_DIR / "raycast-timegate-installer.sh")],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+            )
+
+            output = temp_root / "synthetic-course-timegate.zip"
+            self.assertTrue(output.is_file())
+            with zipfile.ZipFile(output) as archive:
+                self.assertIsNone(archive.testzip())
+                entries = archive.namelist()
+                config = json.loads(
+                    archive.read("timegate/timegate.config.json")
+                )
+                self.assertEqual(config["minRequiredMinutes"], 20)
+                self.assertEqual(config["maxAllowedMinutes"], 75)
+                self.assertFalse(
+                    any(
+                        entry.startswith("timegate/observability/")
+                        for entry in entries
+                    )
+                )
+                driver = archive.read("scormdriver/indexAPI.html")
+                self.assertNotIn(b"data-sis-observability", driver)
+
     def test_powershell_packager_accepts_single_sco_scorm_2004_package(
         self,
     ) -> None:
