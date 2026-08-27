@@ -281,9 +281,17 @@ test('Timegate persists and enforces an optional cumulative maximum', async ({ b
       window.localLmsHarness.timegateReady &&
       Boolean(document.getElementById('timegate-root')),
   );
-  await expect(page.locator('#timegate-root .timegate-label')).toHaveText(
-    'Maximum time remaining',
+  await expect(page.locator('#timegate-root .timegate-ring-label')).toHaveText(
+    'Min met',
   );
+  await expect(page.locator('#timegate-root .timegate-ring-value')).toHaveText(
+    '0:00',
+  );
+  await expect(page.locator('#timegate-root .timegate-ring-svg')).toHaveAttribute(
+    'role',
+    'progressbar',
+  );
+  await expect(page.locator('#timegate-root .timegate-ring-dot')).toHaveCount(3);
   await page.locator('#initialize').click();
 
   await expect(page.locator('#timegate-walkback')).toBeVisible({ timeout: 6_000 });
@@ -329,14 +337,45 @@ test('Timegate persists and enforces an optional cumulative maximum', async ({ b
   const invalidPage = await invalidContext.newPage();
   await openHarness(invalidPage, '?timegate=max-invalid');
   await invalidPage.waitForFunction(() => window.localLmsHarness.timegateReady);
-  await expect(invalidPage.locator('#timegate-root .timegate-label')).toHaveText(
-    'Configuration Error',
+  await expect(invalidPage.locator('#timegate-root .timegate-ring-label')).toHaveText(
+    'Settings',
     { timeout: 6_000 },
   );
   await expect(invalidPage.locator('#timegate-walkback')).toContainText(
     'Course reporting unavailable',
   );
   await invalidContext.close();
+});
+
+test('Timegate ring places Min on the Max scale and cycles compact details', async ({ page }) => {
+  await openHarness(page, '?timegate=ring');
+  await page.waitForFunction(
+    () =>
+      window.localLmsHarness.timegateReady &&
+      Boolean(document.getElementById('timegate-root')),
+  );
+
+  const root = page.locator('#timegate-root');
+  await expect(root.locator('.timegate-ring-marker')).toHaveAttribute(
+    'transform',
+    'rotate(96.00 50 50)',
+  );
+  await expect(root.locator('.timegate-ring-svg')).toHaveAttribute(
+    'aria-valuetext',
+    /Min required 20:00\. Max allowed 1:15:00/,
+  );
+  await expect(root.locator('.timegate-ring-dot')).toHaveCount(3);
+  await expect(root.locator('.timegate-ring-label')).toHaveText('Min left');
+
+  const center = root.locator('.timegate-ring-center');
+  await center.click();
+  await expect(center).toHaveClass(/timegate-ring-changing/);
+  await expect(root.locator('.timegate-ring-label')).toHaveText('Min required');
+  await expect(root.locator('.timegate-ring-value')).toHaveText('20:00');
+
+  await center.click();
+  await expect(root.locator('.timegate-ring-label')).toHaveText('Max allowed');
+  await expect(root.locator('.timegate-ring-value')).toHaveText('1:15:00');
 });
 
 test('Timegate cancels queued completion when the course resets to incomplete', async ({ browser }) => {
@@ -609,11 +648,11 @@ test('default dual storage does not import anonymous state for another learner',
   await page.evaluate(() => window.localLmsHarness.reset());
   await page.locator('#initialize').click();
 
-  await expect(page.locator('#timegate-root .timegate-label')).toHaveText(
-    'Time remaining',
+  await expect(page.locator('#timegate-root .timegate-ring-label')).toHaveText(
+    'Min left',
   );
-  await expect(page.locator('#timegate-root .timegate-time')).not.toHaveText(
-    'Ensure you\'ve completed all course content before exiting.',
+  await expect(page.locator('#timegate-root .timegate-ring-value')).not.toHaveText(
+    '0:00',
   );
   await context.close();
 });
@@ -626,7 +665,7 @@ test('Timegate visually hands off the modal timer and explains the live indicato
 
   await expect(page.locator('#timegate-launch-modal')).toBeVisible();
   await expect(page.locator('.timegate-launch-guide-title')).toHaveText(
-    'Keep an eye on this timer',
+    'Track active time at a glance',
   );
   await expect(
     page.locator('#timegate-launch-modal .timegate-demo-card'),
@@ -637,20 +676,23 @@ test('Timegate visually hands off the modal timer and explains the live indicato
 
   await page.getByRole('button', { name: 'I understand' }).click();
   await expect(page.locator('#timegate-root')).toBeVisible();
-  await expect(page.locator('#timegate-root .timegate-card')).toHaveClass(
-    /timegate-card-attention/,
+  await expect(page.locator('#timegate-root .timegate-ring-label')).toHaveText(
+    'Min left',
   );
-
-  const help = page.getByRole('button', { name: "What's this?" });
-  await help.click();
-  await expect(help).toHaveAttribute('aria-expanded', 'true');
-  await expect(page.locator('#timegate-help-tooltip')).toBeVisible();
-  await expect(page.locator('#timegate-help-tooltip')).toContainText(
-    'tracks your active time across course visits',
+  await expect(page.locator('#timegate-root .timegate-ring-value')).toContainText(
+    ':',
   );
-  await help.press('Escape');
-  await expect(help).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.locator('#timegate-help-tooltip')).toBeHidden();
+  await expect(page.locator('#timegate-root .timegate-ring-svg')).toHaveAttribute(
+    'role',
+    'progressbar',
+  );
+  await expect(page.locator('#timegate-root .timegate-ring')).toHaveClass(
+    /timegate-ring-attention/,
+  );
+  await expect(page.locator('#timegate-root .timegate-ring-label')).toHaveText(
+    'Min required',
+    { timeout: 4_000 },
+  );
   await context.close();
 
   const reducedContext = await browser.newContext({

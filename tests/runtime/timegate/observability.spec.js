@@ -905,8 +905,8 @@ test('missing required config fails closed instead of using a zero-minute floor'
       window.localLmsHarness.timegateReady &&
       Boolean(document.getElementById('timegate-root')),
   );
-  await expect(page.locator('#timegate-root .timegate-label')).toHaveText(
-    'Configuration Error',
+  await expect(page.locator('#timegate-root .timegate-ring-label')).toHaveText(
+    'Settings',
   );
   const result = await page.evaluate(() => {
     window.localLmsHarness.reset();

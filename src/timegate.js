@@ -80,6 +80,9 @@
   var maximumExitFinalized = false;
   var configurationBlocked = false;
 
+  var RING_CAROUSEL_INTERVAL_MS = 2800;
+  var RING_CAROUSEL_TRANSITION_MS = 150;
+
   /* Debug logger gated by config. */
   function log() {
     if (!config || !config.debug) return;
@@ -462,6 +465,178 @@
     return ms;
   }
 
+  function createSvgElement(name) {
+    return document.createElementNS('http://www.w3.org/2000/svg', name);
+  }
+
+  function createRingVisual(className, interactive) {
+    var ring = document.createElement('div');
+    ring.className = className;
+
+    var svg = createSvgElement('svg');
+    svg.classList.add('timegate-ring-svg');
+    svg.setAttribute('viewBox', '0 0 100 100');
+    svg.setAttribute('role', 'progressbar');
+    svg.setAttribute('aria-valuemin', '0');
+    svg.setAttribute('aria-valuemax', '100');
+    svg.setAttribute('aria-valuenow', '0');
+
+    var track = createSvgElement('circle');
+    track.classList.add('timegate-ring-track');
+    track.setAttribute('cx', '50');
+    track.setAttribute('cy', '50');
+    track.setAttribute('r', '38');
+
+    var fill = createSvgElement('circle');
+    fill.classList.add('timegate-ring-fill');
+    fill.setAttribute('cx', '50');
+    fill.setAttribute('cy', '50');
+    fill.setAttribute('r', '38');
+    fill.setAttribute('pathLength', '100');
+    fill.setAttribute('stroke-dasharray', '0 100');
+
+    var marker = createSvgElement('line');
+    marker.classList.add('timegate-ring-marker');
+    marker.setAttribute('x1', '50');
+    marker.setAttribute('y1', '6');
+    marker.setAttribute('x2', '50');
+    marker.setAttribute('y2', '16');
+    marker.hidden = true;
+
+    svg.appendChild(track);
+    svg.appendChild(fill);
+    svg.appendChild(marker);
+
+    var center = document.createElement(interactive ? 'button' : 'div');
+    center.className = 'timegate-ring-center';
+    if (interactive) center.type = 'button';
+
+    var value = document.createElement('strong');
+    value.className = 'timegate-ring-value';
+    value.textContent = '0:00';
+
+    var label = document.createElement('span');
+    label.className = 'timegate-ring-label';
+    label.textContent = 'Min left';
+
+    var dots = document.createElement('span');
+    dots.className = 'timegate-ring-dots';
+    dots.setAttribute('aria-hidden', 'true');
+    var dotElements = [];
+    for (var index = 0; index < 3; index += 1) {
+      var dot = document.createElement('i');
+      dot.className = 'timegate-ring-dot';
+      dot.setAttribute('data-current', index === 0 ? 'true' : 'false');
+      dots.appendChild(dot);
+      dotElements.push(dot);
+    }
+
+    center.appendChild(value);
+    center.appendChild(label);
+    center.appendChild(dots);
+    ring.appendChild(svg);
+    ring.appendChild(center);
+
+    return {
+      ring: ring,
+      svg: svg,
+      fill: fill,
+      marker: marker,
+      center: center,
+      value: value,
+      label: label,
+      dots: dots,
+      dotElements: dotElements
+    };
+  }
+
+  function prefersReducedMotion() {
+    try {
+      return !!(
+        window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      );
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function applyRingSlide(ui) {
+    if (!ui.slides || !ui.slides.length) return;
+    if (ui.carouselIndex >= ui.slides.length) ui.carouselIndex = 0;
+    var slide = ui.slides[ui.carouselIndex];
+    ui.value.textContent = slide.value;
+    ui.label.textContent = slide.label;
+    ui.center.setAttribute(
+      'aria-label',
+      slide.label + ': ' + slide.value + '. Activate to show the next detail.'
+    );
+    ui.dotElements.forEach(function (dot, index) {
+      dot.hidden = index >= ui.slides.length;
+      dot.setAttribute(
+        'data-current',
+        index === ui.carouselIndex ? 'true' : 'false'
+      );
+    });
+  }
+
+  function renderRingSlide(ui, animate) {
+    if (!animate && ui.carouselTransitionTimer !== null) return;
+    if (
+      !animate ||
+      prefersReducedMotion() ||
+      !ui.slides ||
+      ui.slides.length < 2
+    ) {
+      applyRingSlide(ui);
+      return;
+    }
+    if (ui.carouselTransitionTimer !== null) {
+      window.clearTimeout(ui.carouselTransitionTimer);
+    }
+    ui.center.classList.add('timegate-ring-changing');
+    ui.carouselTransitionTimer = window.setTimeout(function () {
+      applyRingSlide(ui);
+      ui.center.classList.remove('timegate-ring-changing');
+      ui.carouselTransitionTimer = null;
+    }, RING_CAROUSEL_TRANSITION_MS);
+  }
+
+  function stopRingCarousel(ui) {
+    if (ui.carouselTimer !== null) window.clearInterval(ui.carouselTimer);
+    ui.carouselTimer = null;
+  }
+
+  function startRingCarousel(ui) {
+    stopRingCarousel(ui);
+    ui.carouselTimer = window.setInterval(function () {
+      if (!ui.slides || ui.slides.length < 2) return;
+      ui.carouselIndex = (ui.carouselIndex + 1) % ui.slides.length;
+      renderRingSlide(ui, true);
+    }, RING_CAROUSEL_INTERVAL_MS);
+  }
+
+  function updateRingScale(visual, progressPercent, markerPercent, ariaText) {
+    var progress = Math.max(0, Math.min(100, progressPercent));
+    visual.fill.setAttribute(
+      'stroke-dasharray',
+      progress.toFixed(2) + ' 100'
+    );
+    visual.svg.setAttribute('aria-valuenow', String(Math.round(progress)));
+    visual.svg.setAttribute('aria-valuetext', ariaText);
+    if (typeof markerPercent === 'number' && isFinite(markerPercent)) {
+      var marker = Math.max(0, Math.min(100, markerPercent));
+      visual.marker.hidden = false;
+      visual.marker.setAttribute(
+        'transform',
+        'rotate(' + (marker * 3.6).toFixed(2) + ' 50 50)'
+      );
+    } else {
+      visual.marker.hidden = true;
+      visual.marker.removeAttribute('transform');
+    }
+  }
+
   /* Build and insert the timer overlay UI. */
   function createUi() {
     var root = document.createElement('div');
@@ -470,89 +645,41 @@
       'timegate--' +
       (config.position === 'bottom-left' ? 'bottom-left' : 'bottom-right');
 
-    var card = document.createElement('div');
-    card.className = 'timegate-card';
-
-    var close = document.createElement('button');
-    close.className = 'timegate-close';
-    close.type = 'button';
-    close.textContent = '✕';
-    close.setAttribute('aria-label', 'Hide timer');
-    close.onclick = function () {
-      document.getElementById('timegate-root').style.display = 'none';
-    };
-
-    var live = document.createElement('div');
-    live.className = 'timegate-live';
-    live.setAttribute('aria-live', 'polite');
-    live.setAttribute('role', 'status');
-
-    var label = document.createElement('div');
-    label.className = 'timegate-label';
-    label.textContent = 'Time remaining';
-
-    var time = document.createElement('div');
-    time.className = 'timegate-time';
-    time.textContent = '0:00';
-
-    var sub = document.createElement('div');
-    sub.className = 'timegate-sub';
-    sub.textContent = '';
-
-    var helpWrap = document.createElement('div');
-    helpWrap.className = 'timegate-help-wrap';
-
-    var help = document.createElement('button');
-    help.className = 'timegate-help-button';
-    help.type = 'button';
-    help.textContent = 'What\'s this?';
-    help.setAttribute('aria-expanded', 'false');
-    help.setAttribute('aria-controls', 'timegate-help-tooltip');
-
-    var tooltip = document.createElement('div');
-    tooltip.id = 'timegate-help-tooltip';
-    tooltip.className = 'timegate-help-tooltip';
-    tooltip.setAttribute('role', 'tooltip');
-    tooltip.hidden = true;
-    tooltip.textContent =
-      'This timer tracks your active time across course visits. You must meet ' +
-      'the minimum time and finish the course content. If a maximum is set, ' +
-      'the timer then shows how much active time remains before the session ends.';
-
-    function setHelpOpen(open) {
-      help.setAttribute('aria-expanded', open ? 'true' : 'false');
-      tooltip.hidden = !open;
-    }
-
-    help.onclick = function () {
-      setHelpOpen(help.getAttribute('aria-expanded') !== 'true');
-    };
-    help.onkeydown = function (event) {
-      if (event.key === 'Escape' || event.keyCode === 27) {
-        setHelpOpen(false);
-      }
-    };
-    help.onblur = function () { setHelpOpen(false); };
-
-    card.appendChild(close);
-    live.appendChild(label);
-    live.appendChild(time);
-    live.appendChild(sub);
-    card.appendChild(live);
-    helpWrap.appendChild(help);
-    helpWrap.appendChild(tooltip);
-    card.appendChild(helpWrap);
-    root.appendChild(card);
+    var visual = createRingVisual('timegate-ring', true);
+    root.appendChild(visual.ring);
 
     document.body.appendChild(root);
 
-    return {
+    var ui = {
       root: root,
-      close: close,
-      label: label,
-      time: time,
-      sub: sub,
+      ring: visual.ring,
+      svg: visual.svg,
+      fill: visual.fill,
+      marker: visual.marker,
+      center: visual.center,
+      value: visual.value,
+      label: visual.label,
+      dots: visual.dots,
+      dotElements: visual.dotElements,
+      slides: [],
+      carouselIndex: 0,
+      carouselTimer: null,
+      carouselTransitionTimer: null
     };
+
+    ui.center.onclick = function () {
+      if (!ui.slides || ui.slides.length < 2) return;
+      ui.carouselIndex = (ui.carouselIndex + 1) % ui.slides.length;
+      renderRingSlide(ui, true);
+      startRingCarousel(ui);
+    };
+    ui.center.onmouseenter = function () { stopRingCarousel(ui); };
+    ui.center.onmouseleave = function () { startRingCarousel(ui); };
+    ui.center.onfocus = function () { stopRingCarousel(ui); };
+    ui.center.onblur = function () { startRingCarousel(ui); };
+    startRingCarousel(ui);
+
+    return ui;
   }
 
   /* Animate the modal's sample timer into the corner where the live timer stays. */
@@ -670,14 +797,16 @@
 
     var p1 = document.createElement('p');
     p1.textContent =
-      'Welcome! A timer in the bottom right of your screen tracks your progress. ' +
-      'To complete this course, you\u2019ll need to finish all the content AND meet the minimum time requirement.';
+      'The ring in the bottom right tracks your active time. To complete this ' +
+      'course, you\u2019ll need to finish all the content and meet the ' +
+      formatTime(state.minRequiredSeconds) +
+      ' Min requirement.';
 
     if (hasMaximumTimeLimit()) {
       p1.textContent +=
-        ' This course allows up to ' +
+        ' The yellow marker is Min, and the full ring is the ' +
         formatTime(state.maxAllowedSeconds) +
-        ' of active time.';
+        ' Max allowed.';
     }
 
     var p2 = document.createElement('p');
@@ -696,31 +825,46 @@
 
     var guideTitle = document.createElement('div');
     guideTitle.className = 'timegate-launch-guide-title';
-    guideTitle.textContent = 'Keep an eye on this timer';
+    guideTitle.textContent = 'Track active time at a glance';
 
     var guideText = document.createElement('div');
     guideText.className = 'timegate-launch-guide-text';
     guideText.textContent =
-      'It moves to the corner and counts down only while you are actively participating.';
+      'The ring fills only while you are active. Its center rotates between ' +
+      'Min left, Min required, and Max allowed.';
 
     var previewRemaining = state ?
       Math.max(0, state.minRequiredSeconds - Math.floor(state.elapsedSeconds)) : 0;
+    var previewElapsed = state ? Math.max(0, state.elapsedSeconds) : 0;
+    var previewScaleSeconds = hasMaximumTimeLimit() ?
+      state.maxAllowedSeconds : state.minRequiredSeconds;
+    var previewProgressPercent = previewScaleSeconds > 0 ?
+      (previewElapsed / previewScaleSeconds) * 100 : 100;
+    var previewMarkerPercent = hasMaximumTimeLimit() && previewScaleSeconds > 0 ?
+      (state.minRequiredSeconds / previewScaleSeconds) * 100 : null;
+    var previewAriaText =
+      formatTime(previewElapsed) +
+      ' active. Min required ' +
+      formatTime(state.minRequiredSeconds) +
+      (hasMaximumTimeLimit() ?
+        '. Max allowed ' + formatTime(state.maxAllowedSeconds) : '');
 
     var demoCard = document.createElement('div');
     demoCard.className = 'timegate-demo-card';
-
-    var demoLabel = document.createElement('div');
-    demoLabel.className = 'timegate-label';
-    demoLabel.textContent = 'Time remaining';
-
-    var demoTime = document.createElement('div');
-    demoTime.className = 'timegate-time';
-    demoTime.textContent = formatTime(previewRemaining);
+    var demoVisual = createRingVisual('timegate-ring timegate-demo-ring', false);
+    demoVisual.value.textContent = formatTime(previewRemaining);
+    demoVisual.label.textContent = 'Min left';
+    demoVisual.dots.hidden = !hasMaximumTimeLimit();
+    updateRingScale(
+      demoVisual,
+      previewProgressPercent,
+      previewMarkerPercent,
+      previewAriaText
+    );
 
     guideCopy.appendChild(guideTitle);
     guideCopy.appendChild(guideText);
-    demoCard.appendChild(demoLabel);
-    demoCard.appendChild(demoTime);
+    demoCard.appendChild(demoVisual.ring);
     guide.appendChild(guideCopy);
     guide.appendChild(demoCard);
     body.appendChild(guide);
@@ -735,17 +879,21 @@
 
     var previewCard = document.createElement('div');
     previewCard.className = 'timegate-preview-card';
+    var previewVisual = createRingVisual(
+      'timegate-ring timegate-preview-ring',
+      false
+    );
+    previewVisual.value.textContent = formatTime(previewRemaining);
+    previewVisual.label.textContent = 'Min left';
+    previewVisual.dots.hidden = !hasMaximumTimeLimit();
+    updateRingScale(
+      previewVisual,
+      previewProgressPercent,
+      previewMarkerPercent,
+      previewAriaText
+    );
 
-    var previewLabel = document.createElement('div');
-    previewLabel.className = 'timegate-label';
-    previewLabel.textContent = 'Time remaining';
-
-    var previewTime = document.createElement('div');
-    previewTime.className = 'timegate-time';
-    previewTime.textContent = formatTime(previewRemaining);
-
-    previewCard.appendChild(previewLabel);
-    previewCard.appendChild(previewTime);
+    previewCard.appendChild(previewVisual.ring);
     previewRoot.appendChild(previewCard);
     document.body.appendChild(previewRoot);
 
@@ -765,11 +913,11 @@
       if (handoff && typeof handoff.cancel === 'function') handoff.cancel();
       launchModalEl = null;
       if (typeof onAcknowledge === 'function') onAcknowledge();
-      var liveCard = document.querySelector('#timegate-root .timegate-card');
-      if (liveCard) {
-        liveCard.classList.add('timegate-card-attention');
+      var liveRing = document.querySelector('#timegate-root .timegate-ring');
+      if (liveRing) {
+        liveRing.classList.add('timegate-ring-attention');
         setTimeout(function () {
-          liveCard.classList.remove('timegate-card-attention');
+          liveRing.classList.remove('timegate-ring-attention');
         }, 1400);
       }
     };
@@ -1179,23 +1327,20 @@
 
   /* Update overlay text and state classes. */
   function updateUi(ui, opts) {
-    var display = opts.display;
-    var sub = opts.sub;
     var complete = opts.complete;
     var paused = opts.paused;
     var locked = opts.locked;
     var stateClass = opts.stateClass;
-    var labelText = opts.labelText;
-    var showLabel = opts.showLabel;
 
-    ui.time.textContent = display;
-
-    ui.sub.textContent = sub || '';
-
-    if (typeof labelText === 'string') {
-      ui.label.textContent = labelText;
-    }
-    ui.label.style.display = showLabel ? '' : 'none';
+    ui.slides = opts.slides;
+    if (ui.carouselIndex >= ui.slides.length) ui.carouselIndex = 0;
+    renderRingSlide(ui, false);
+    updateRingScale(
+      ui,
+      opts.progressPercent,
+      opts.markerPercent,
+      opts.progressText
+    );
 
     var rootClass = ui.root.className;
     var nextClass =
@@ -2982,59 +3127,77 @@
 
   /* Compute UI state based on timer and activity. */
   function computeUiState() {
-    var remaining = Math.max(
+    var elapsedSeconds = Math.max(0, state.elapsedSeconds || 0);
+    var minRequiredSeconds = Math.max(0, state.minRequiredSeconds || 0);
+    var minRemainingSeconds = Math.max(
       0,
-      state.minRequiredSeconds - state.elapsedSeconds,
+      minRequiredSeconds - elapsedSeconds
     );
-    var display = formatTime(remaining);
     var pauseReason = getPauseReason();
     var paused = !!pauseReason;
     var locked = !!(config.enforceCompletion && !state.minMetAt);
     var minMet = !!state.minMetAt;
-    var sub = '';
-    var labelText = 'Time remaining';
-    var showLabel = true;
     var stateClass = 'timegate--state-normal';
+    var scaleSeconds = hasMaximumTimeLimit() ?
+      state.maxAllowedSeconds : minRequiredSeconds;
+    var progressPercent = scaleSeconds > 0 ?
+      (elapsedSeconds / scaleSeconds) * 100 : 100;
+    var markerPercent = hasMaximumTimeLimit() && scaleSeconds > 0 ?
+      (minRequiredSeconds / scaleSeconds) * 100 : null;
+    var minStatusLabel = 'Min left';
+    if (minMet) {
+      minStatusLabel = 'Min met';
+    } else if (paused) {
+      minStatusLabel = 'Min paused';
+    }
+    var slides = [
+      {
+        value: formatTime(minRemainingSeconds),
+        label: minStatusLabel
+      },
+      {
+        value: formatTime(minRequiredSeconds),
+        label: 'Min required'
+      }
+    ];
+    if (hasMaximumTimeLimit()) {
+      slides.push({
+        value: formatTime(state.maxAllowedSeconds),
+        label: 'Max allowed'
+      });
+    }
+    var progressText =
+      formatTime(elapsedSeconds) +
+      ' active. Min required ' +
+      formatTime(minRequiredSeconds) +
+      (hasMaximumTimeLimit() ?
+        '. Max allowed ' + formatTime(state.maxAllowedSeconds) : '');
 
     if (configurationBlocked) {
-      display = 'Reporting unavailable';
-      labelText = 'Configuration Error';
-      sub = 'Close this course and contact your training administrator.';
       stateClass = 'timegate--state-paused';
+      progressPercent = 0;
+      markerPercent = null;
+      progressText = 'Required-time progress unavailable';
+      slides = [{ value: 'Error', label: 'Settings' }];
     } else if (isMaximumTimeReached()) {
-      display = 'Maximum time reached';
-      labelText = 'Session Ended';
       stateClass = 'timegate--state-paused';
-    } else if (minMet && hasMaximumTimeLimit()) {
-      display = formatTime(
-        Math.max(0, state.maxAllowedSeconds - state.elapsedSeconds)
-      );
-      labelText = 'Maximum time remaining';
-      sub = 'Minimum time requirement met';
-      stateClass = 'timegate--state-complete';
+      slides = [{ value: '0:00', label: 'Max reached' }];
     } else if (minMet) {
-      display = 'Ensure you\'ve completed all course content before exiting.';
-      labelText = 'Time Requirement Met';
-      showLabel = true;
       stateClass = 'timegate--state-complete';
     } else if (paused) {
-      labelText = 'Idle Timeout';
-      sub = '';
       stateClass = 'timegate--state-paused';
-    } else if (hasMaximumTimeLimit()) {
-      sub = 'Maximum active time: ' + formatTime(state.maxAllowedSeconds);
     }
 
     return {
-      display: display,
       paused: paused,
       locked: locked,
       complete: minMet,
-      sub: sub,
-      labelText: labelText,
-      showLabel: showLabel,
       stateClass: stateClass,
       pauseReason: pauseReason,
+      progressPercent: Math.max(0, Math.min(100, progressPercent)),
+      markerPercent: markerPercent,
+      progressText: progressText,
+      slides: slides
     };
   }
 
@@ -3109,23 +3272,23 @@
       }
     }
     var signature =
-      uiState.display +
-      '|' +
-      uiState.sub +
-      '|' +
       (uiState.complete ? '1' : '0') +
       '|' +
       (uiState.paused ? '1' : '0') +
       '|' +
       (uiState.locked ? '1' : '0') +
       '|' +
-      uiState.labelText +
-      '|' +
-      (uiState.showLabel ? '1' : '0') +
-      '|' +
       uiState.stateClass +
       '|' +
-      uiState.sub;
+      uiState.progressPercent.toFixed(2) +
+      '|' +
+      String(uiState.markerPercent) +
+      '|' +
+      uiState.progressText +
+      '|' +
+      uiState.slides.map(function (slide) {
+        return slide.value + ':' + slide.label;
+      }).join(',');
     if (signature !== lastUiRender) {
       updateUi(ui, uiState);
       lastUiRender = signature;
@@ -3148,6 +3311,7 @@
     }, 1000);
 
     window.addEventListener('pagehide', function () {
+      stopRingCarousel(ui);
       if (!apiInitialized || apiTerminated) {
         persistState(true);
         releaseLock();
@@ -3169,6 +3333,7 @@
     }, true);
     window.addEventListener('pageshow', function () {
       lastTickTs = Date.now();
+      startRingCarousel(ui);
     });
   }
 

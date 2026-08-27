@@ -285,11 +285,15 @@
       minimumMinutes = 0.04;
     } else if (timegateMode === 'max') {
       minimumMinutes = 0;
+    } else if (timegateMode === 'ring') {
+      minimumMinutes = 20;
     } else if (timegateMode === 'dual-shared') {
       minimumMinutes = 10;
     }
     if (timegateMode === 'max' || timegateMode === 'max-invalid') {
       maximumMinutes = 0.04;
+    } else if (timegateMode === 'ring') {
+      maximumMinutes = 75;
     }
     window.TIMEGATE_CONFIG = {
       courseKey: 'observability-browser-' + timegateMode,
