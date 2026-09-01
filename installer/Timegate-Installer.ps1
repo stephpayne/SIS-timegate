@@ -15,6 +15,7 @@ Add-Type -AssemblyName System.Drawing
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $RuntimeSource = Join-Path $ProjectRoot 'src'
 $CoreInstaller = Join-Path $PSScriptRoot 'install-timegate.ps1'
+$CoreSupport = Join-Path $PSScriptRoot 'timegate_config.ps1'
 
 function Show-Error([string]$Message) {
     [System.Windows.Forms.MessageBox]::Show(
@@ -82,11 +83,13 @@ function Get-DefaultSettings {
 function New-TimegateConfig {
     param(
         [int]$Minutes,
+        [Nullable[int]]$MaximumMinutes,
         [System.Collections.IDictionary]$Settings
     )
 
     $config = [ordered]@{
         minRequiredMinutes = $Minutes
+        maxAllowedMinutes = $MaximumMinutes
     }
 
     foreach ($key in $Settings.Keys) {
@@ -111,6 +114,7 @@ function Test-SettingsAreDefault {
 function Get-ReviewText {
     param(
         [int]$Minutes,
+        [Nullable[int]]$MaximumMinutes,
         [System.Collections.IDictionary]$Settings,
         [string]$OutputZip
     )
@@ -137,9 +141,11 @@ function Get-ReviewText {
     }
 
     $advancedState = if (Test-SettingsAreDefault $Settings) { 'standard defaults' } else { 'customized' }
+    $maximum = if ($null -eq $MaximumMinutes) { 'none' } else { "$MaximumMinutes minutes" }
 
     return @"
 Floor time: $Minutes minutes
+Maximum active time: $maximum
 
 Completion gate: $completion
 Resume storage: $($Settings['storageMode'])
@@ -249,7 +255,7 @@ function Show-AdvancedSettingsDialog {
     $idlePauseSeconds = New-Object System.Windows.Forms.NumericUpDown
     $idlePauseSeconds.Location = New-Object System.Drawing.Point(125, 58)
     $idlePauseSeconds.Size = New-Object System.Drawing.Size(80, 26)
-    $idlePauseSeconds.Minimum = 0
+    $idlePauseSeconds.Minimum = 1
     $idlePauseSeconds.Maximum = 3600
     $idlePauseSeconds.Value = [decimal][int]$Settings['idleTimeoutSeconds']
     [void]$timerGroup.Controls.Add($idlePauseSeconds)
@@ -527,9 +533,61 @@ function Test-TimegateZip([string]$ZipPath) {
             'timegate/timegate.config.json'
         )
 
-        $missing = @($required | Where-Object { $entries -notcontains $_ })
+        $missing = @($required | Where-Object { $entries -cnotcontains $_ })
         if ($missing.Count -gt 0) {
             throw "The output ZIP was created, but it is missing: $($missing -join ', ')"
+        }
+
+        $manifestEntry = @($archive.Entries | Where-Object {
+            $_.FullName.Replace('\', '/') -ceq 'imsmanifest.xml'
+        })
+        if ($manifestEntry.Count -ne 1) {
+            throw 'The output ZIP must contain one root imsmanifest.xml.'
+        }
+        $manifestReader = New-Object System.IO.StreamReader($manifestEntry[0].Open())
+        try {
+            [xml]$manifestXml = $manifestReader.ReadToEnd()
+        }
+        finally {
+            $manifestReader.Dispose()
+        }
+        $namespaces = New-Object System.Xml.XmlNamespaceManager($manifestXml.NameTable)
+        $packageNamespace = $manifestXml.DocumentElement.NamespaceURI
+        $adlcpNamespace = $manifestXml.DocumentElement.GetNamespaceOfPrefix('adlcp')
+        $namespaces.AddNamespace('imscp', $packageNamespace)
+        $namespaces.AddNamespace('adlcp', $adlcpNamespace)
+        $scoResources = @($manifestXml.SelectNodes(
+            '//imscp:resource[@adlcp:scormtype="sco" or @adlcp:scormType="sco"]',
+            $namespaces
+        ))
+        if ($scoResources.Count -ne 1) {
+            throw 'The output ZIP must contain exactly one SCO resource.'
+        }
+        $launchHref = $scoResources[0].GetAttribute('href').Replace('\', '/')
+        $launchEntry = @($archive.Entries | Where-Object {
+            $_.FullName.Replace('\', '/') -ceq $launchHref
+        })
+        if ($launchEntry.Count -ne 1) {
+            throw "The output ZIP is missing its exact SCO launch file: $launchHref"
+        }
+        $launchReader = New-Object System.IO.StreamReader($launchEntry[0].Open())
+        try {
+            $launchHtml = $launchReader.ReadToEnd()
+        }
+        finally {
+            $launchReader.Dispose()
+        }
+        $packageBase = New-Object System.Uri('https://timegate.invalid/')
+        $launchUri = New-Object System.Uri($packageBase, $launchHref)
+        $launchDirectoryUri = New-Object System.Uri($launchUri, '.')
+        $expectedJs = $launchDirectoryUri.MakeRelativeUri(
+            (New-Object System.Uri($packageBase, 'timegate/timegate.js'))
+        ).ToString()
+        $expectedCss = $launchDirectoryUri.MakeRelativeUri(
+            (New-Object System.Uri($packageBase, 'timegate/timegate.css'))
+        ).ToString()
+        if ((Get-TimegateReferenceState $launchHtml $expectedJs $expectedCss) -ne 'complete') {
+            throw 'The output ZIP launch file does not reference the exact packaged Timegate assets.'
         }
     }
     finally {
@@ -546,6 +604,13 @@ if (-not (Test-Path -LiteralPath $CoreInstaller)) {
     Show-Error "The core installer is missing:`n$CoreInstaller"
     exit 1
 }
+
+if (-not (Test-Path -LiteralPath $CoreSupport)) {
+    Show-Error "The installer configuration validator is missing:`n$CoreSupport"
+    exit 1
+}
+
+. $CoreSupport
 
 $advancedSettings = Get-DefaultSettings
 
@@ -610,11 +675,39 @@ $minutesLabel.Location = New-Object System.Drawing.Point(140, 218)
 $minutesLabel.AutoSize = $true
 [void]$form.Controls.Add($minutesLabel)
 
+$maxEnabled = New-Object System.Windows.Forms.CheckBox
+$maxEnabled.Text = 'Set maximum active time'
+$maxEnabled.Location = New-Object System.Drawing.Point(275, 190)
+$maxEnabled.Size = New-Object System.Drawing.Size(190, 24)
+$maxEnabled.Checked = $false
+[void]$form.Controls.Add($maxEnabled)
+
+$maxMinutes = New-Object System.Windows.Forms.NumericUpDown
+$maxMinutes.Location = New-Object System.Drawing.Point(275, 215)
+$maxMinutes.Size = New-Object System.Drawing.Size(100, 28)
+$maxMinutes.Minimum = 1
+$maxMinutes.Maximum = 600
+$maxMinutes.Value = 60
+$maxMinutes.Enabled = $false
+[void]$form.Controls.Add($maxMinutes)
+
+$maxMinutesLabel = New-Object System.Windows.Forms.Label
+$maxMinutesLabel.Text = 'minutes'
+$maxMinutesLabel.Location = New-Object System.Drawing.Point(385, 218)
+$maxMinutesLabel.AutoSize = $true
+$maxMinutesLabel.Enabled = $false
+[void]$form.Controls.Add($maxMinutesLabel)
+
 $advancedButton = New-Object System.Windows.Forms.Button
 $advancedButton.Text = 'Advanced Settings...'
-$advancedButton.Location = New-Object System.Drawing.Point(275, 213)
+$advancedButton.Location = New-Object System.Drawing.Point(520, 213)
 $advancedButton.Size = New-Object System.Drawing.Size(155, 32)
 [void]$form.Controls.Add($advancedButton)
+
+$maxEnabled.Add_CheckedChanged({
+    $maxMinutes.Enabled = $maxEnabled.Checked
+    $maxMinutesLabel.Enabled = $maxEnabled.Checked
+})
 
 $advancedHeading = New-Object System.Windows.Forms.Label
 $advancedHeading.Text = 'Standard settings are already selected.'
@@ -673,6 +766,7 @@ $browse.Add_Click({
 $install.Add_Click({
     $inputZip = $coursePath.Text.Trim()
     $floorMinutes = [int]$minutes.Value
+    $maximumMinutes = if ($maxEnabled.Checked) { [int]$maxMinutes.Value } else { $null }
 
     if ([string]::IsNullOrWhiteSpace($inputZip) -or -not (Test-Path -LiteralPath $inputZip -PathType Leaf)) {
         Show-Error 'Choose a SCORM ZIP first.'
@@ -681,6 +775,11 @@ $install.Add_Click({
 
     if ([System.IO.Path]::GetExtension($inputZip).ToLowerInvariant() -ne '.zip') {
         Show-Error 'Choose a ZIP file.'
+        return
+    }
+
+    if ($null -ne $maximumMinutes -and $maximumMinutes -le $floorMinutes) {
+        Show-Error 'Maximum active time must be greater than the required floor time.'
         return
     }
 
@@ -693,7 +792,7 @@ $install.Add_Click({
     }
     $outputZip = Join-Path $inputFolder "$outputStem.zip"
 
-    $review = Get-ReviewText -Minutes $floorMinutes -Settings $advancedSettings -OutputZip $outputZip
+    $review = Get-ReviewText -Minutes $floorMinutes -MaximumMinutes $maximumMinutes -Settings $advancedSettings -OutputZip $outputZip
 
     $decision = [System.Windows.Forms.MessageBox]::Show(
         $review,
@@ -752,7 +851,7 @@ $install.Add_Click({
 
         New-Item -ItemType Directory -Path $existingTimegate -Force | Out-Null
         $packageConfig = Join-Path $existingTimegate 'timegate.config.json'
-        Write-Utf8NoBom $packageConfig (New-TimegateConfig -Minutes $floorMinutes -Settings $advancedSettings)
+        Write-Utf8NoBom $packageConfig (New-TimegateConfig -Minutes $floorMinutes -MaximumMinutes $maximumMinutes -Settings $advancedSettings)
 
         $status.Text = 'Adding Timegate and rebuilding the ZIP...'
         $form.Refresh()

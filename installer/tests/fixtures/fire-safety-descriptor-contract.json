@@ -1,0 +1,38 @@
+{
+  "blockCount": 6,
+  "completionPolicy": {
+    "completionPercentage": 100,
+    "reporting": "completed-incomplete",
+    "triggerId": null,
+    "triggerType": "progress"
+  },
+  "continueGateCount": 2,
+  "forcedCommitIntervalSeconds": 20,
+  "lessonTypeCounts": {
+    "blocks": 2,
+    "quiz": 1,
+    "section": 1
+  },
+  "media": [
+    {
+      "durationSeconds": 459,
+      "forwardSeekRestricted": true,
+      "type": "video"
+    }
+  ],
+  "navigationMode": "free",
+  "packageVersion": "oTUPaXq3",
+  "quiz": {
+    "passingScore": 80,
+    "questionCount": 10,
+    "unlimitedRetries": true
+  },
+  "riseCourseId": "vMw4L2rQRHWcdz4SaOtGdikIgFxcrP22",
+  "runtimePackageVersion": "OfKTCpXV",
+  "scormVersion": "1.2",
+  "structureHash": "0f75897d824d9b97acf98b5f4519419e4752c9edc000a112a5e1f6d02aabb639",
+  "warningCodes": [
+    "PACKAGE_VERSION_MISMATCH",
+    "QUIZ_PRESENT_NOT_COMPLETION_TRIGGER"
+  ]
+}

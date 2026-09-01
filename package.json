@@ -1,0 +1,16 @@
+{
+  "name": "sis-timegate",
+  "version": "1.4.0",
+  "private": true,
+  "description": "SCORM Timegate packaging and observability runtime",
+  "scripts": {
+    "test": "node --test tests/runtime/observability.test.js",
+    "test:packaging": "python3 -m unittest discover -s installer/tests -v",
+    "test:browser": "playwright test",
+    "test:all": "npm test && npm run test:packaging && npm run test:browser",
+    "serve:test-harness": "node tests/runtime/harness/server.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.0"
+  }
+}

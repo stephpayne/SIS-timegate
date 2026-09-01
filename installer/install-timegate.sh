@@ -1,168 +1,221 @@
 #!/bin/sh
 # =============================================================================
-# Timegate installer (POSIX sh)
+# Timegate + SCORM observability installer (POSIX sh)
 #
-# Injects the Timegate runtime into an UNZIPPED SCORM package, then zips it.
+# Installs the fail-open runtimes into an UNZIPPED Rise SCORM 1.2 package,
+# validates the result, then creates a sibling <package>-timegate.zip.
 #
-#   Usage:  ./install-timegate.sh  /path/to/unzipped-scorm-folder
-#
-# The runtime that ships lives in ../src (timegate.js, timegate.css,
-# timegate.config.json). It is deployed into the package under ONE
-# version-free folder name -- DEPLOY_DIR below. Because nothing here is named
-# after a version, bumping Timegate never changes a single path in this script.
-# See ../MAINTAINING.md.
+# Values may be provided by flags, environment variables, or interactive
+# prompts. Prefer environment variables for the pilot token so it is not
+# exposed in the process list.
 # =============================================================================
-set -e
-
-# ---- The ONE place the in-package folder name is defined ---------------------
-DEPLOY_DIR="timegate"
+set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-SRC_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../src" && pwd)"
+PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+INSTRUMENTER="$SCRIPT_DIR/instrument_package.py"
+CONFIG_VALIDATOR="$SCRIPT_DIR/timegate_config.py"
+COURSE_DESCRIPTOR="$SCRIPT_DIR/course_descriptor.py"
 
-ROOT_DIR="$1"
+TELEMETRY_ENDPOINT="${SCORM_TELEMETRY_ENDPOINT:-}"
+SOURCE_KEY_ID="${SCORM_SOURCE_KEY_ID:-}"
+PILOT_TOKEN="${SCORM_PILOT_TOKEN:-}"
+PAYCOM_ID="${PAYCOM_COURSE_ID:-}"
+TIMEGATE_CONFIG=""
+ROOT_DIR=""
+
+usage() {
+  cat <<EOF
+Usage: $0 [options] <path-to-unzipped-scorm-folder>
+
+Options:
+  --telemetry-endpoint URL  Worker webhook URL (HTTPS; localhost may use HTTP)
+  --source-key-id ID        Allowlisted observability source-key ID
+  --pilot-token TOKEN       Course-scoped pilot token (environment preferred)
+  --paycom-course-id ID     Paycom Course ID used for correlation
+  --timegate-config FILE    Generated/custom Timegate configuration
+  -h, --help                Show this help
+
+Environment alternatives:
+  SCORM_TELEMETRY_ENDPOINT, SCORM_SOURCE_KEY_ID, SCORM_PILOT_TOKEN,
+  PAYCOM_COURSE_ID
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --telemetry-endpoint)
+      [ "$#" -ge 2 ] || { echo "Missing value for $1" >&2; exit 2; }
+      TELEMETRY_ENDPOINT="$2"
+      shift 2
+      ;;
+    --source-key-id)
+      [ "$#" -ge 2 ] || { echo "Missing value for $1" >&2; exit 2; }
+      SOURCE_KEY_ID="$2"
+      shift 2
+      ;;
+    --pilot-token)
+      [ "$#" -ge 2 ] || { echo "Missing value for $1" >&2; exit 2; }
+      PILOT_TOKEN="$2"
+      shift 2
+      ;;
+    --paycom-course-id)
+      [ "$#" -ge 2 ] || { echo "Missing value for $1" >&2; exit 2; }
+      PAYCOM_ID="$2"
+      shift 2
+      ;;
+    --timegate-config)
+      [ "$#" -ge 2 ] || { echo "Missing value for $1" >&2; exit 2; }
+      TIMEGATE_CONFIG="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      if [ -n "$ROOT_DIR" ]; then
+        echo "Only one package folder may be supplied." >&2
+        usage >&2
+        exit 2
+      fi
+      ROOT_DIR="$1"
+      shift
+      ;;
+  esac
+done
+
 if [ -z "$ROOT_DIR" ]; then
-  echo "Usage: $0 <path-to-unzipped-scorm-folder>"
+  usage >&2
+  exit 2
+fi
+if [ ! -d "$ROOT_DIR" ]; then
+  echo "Package folder not found: $ROOT_DIR" >&2
   exit 1
 fi
 ROOT_DIR="$(CDPATH= cd -- "$ROOT_DIR" && pwd)"
-MANIFEST="$ROOT_DIR/imsmanifest.xml"
-if [ ! -f "$MANIFEST" ]; then
-  echo "imsmanifest.xml not found in $ROOT_DIR"
-  echo "(Point this at the UNZIPPED SCORM folder, where imsmanifest.xml lives.)"
+if [ ! -f "$ROOT_DIR/imsmanifest.xml" ]; then
+  echo "imsmanifest.xml not found in $ROOT_DIR" >&2
+  echo "Point this at the UNZIPPED SCORM folder where the manifest lives." >&2
   exit 1
 fi
 
 PYTHON_BIN=""
-if command -v python3 >/dev/null 2>&1; then PYTHON_BIN="python3";
-elif command -v python >/dev/null 2>&1; then PYTHON_BIN="python"; fi
-if [ -z "$PYTHON_BIN" ]; then echo "Python is required to run this installer."; exit 1; fi
-
-# ---- 1. Copy the runtime into <scorm>/<DEPLOY_DIR>/ --------------------------
-# js/css always refresh; config is copied only if absent, so a config you have
-# already customized inside the package is preserved on re-run.
-mkdir -p "$ROOT_DIR/$DEPLOY_DIR"
-cp "$SRC_DIR/timegate.js"  "$ROOT_DIR/$DEPLOY_DIR/timegate.js"
-cp "$SRC_DIR/timegate.css" "$ROOT_DIR/$DEPLOY_DIR/timegate.css"
-if [ ! -f "$ROOT_DIR/$DEPLOY_DIR/timegate.config.json" ]; then
-  cp "$SRC_DIR/timegate.config.json" "$ROOT_DIR/$DEPLOY_DIR/timegate.config.json"
+if command -v python3 >/dev/null 2>&1 && \
+   python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1 && \
+     python -c 'import sys; raise SystemExit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+fi
+if [ -z "$PYTHON_BIN" ]; then
+  echo "Python 3.9 or newer is required to run this installer." >&2
+  exit 1
+fi
+if [ ! -f "$INSTRUMENTER" ]; then
+  echo "Package instrumenter not found: $INSTRUMENTER" >&2
+  exit 1
+fi
+if [ ! -f "$CONFIG_VALIDATOR" ]; then
+  echo "Timegate configuration validator not found: $CONFIG_VALIDATOR" >&2
+  exit 1
+fi
+if [ ! -f "$COURSE_DESCRIPTOR" ]; then
+  echo "Course descriptor extractor not found: $COURSE_DESCRIPTOR" >&2
+  exit 1
 fi
 
-# ---- 2. Inject into launch HTML + register in manifest -----------------------
-TIMEGATE_ROOT="$ROOT_DIR" TIMEGATE_DIR="$DEPLOY_DIR" "$PYTHON_BIN" - <<'PY'
-import os, re, sys
-import xml.etree.ElementTree as ET
+if [ -z "$TELEMETRY_ENDPOINT" ]; then
+  if [ -t 0 ]; then
+    printf "Telemetry endpoint: " >&2
+    IFS= read -r TELEMETRY_ENDPOINT
+  else
+    echo "Telemetry endpoint is required." >&2
+    exit 2
+  fi
+fi
+if [ -z "$SOURCE_KEY_ID" ]; then
+  if [ -t 0 ]; then
+    printf "Source-key ID: " >&2
+    IFS= read -r SOURCE_KEY_ID
+  else
+    echo "Source-key ID is required." >&2
+    exit 2
+  fi
+fi
+if [ -z "$PILOT_TOKEN" ]; then
+  if [ -t 0 ]; then
+    printf "Pilot token: " >&2
+    stty -echo 2>/dev/null || true
+    IFS= read -r PILOT_TOKEN
+    stty echo 2>/dev/null || true
+    printf "\n" >&2
+  else
+    echo "Pilot token is required." >&2
+    exit 2
+  fi
+fi
+if [ -z "$PAYCOM_ID" ]; then
+  if [ -t 0 ]; then
+    printf "Paycom Course ID: " >&2
+    IFS= read -r PAYCOM_ID
+  else
+    echo "Paycom Course ID is required." >&2
+    exit 2
+  fi
+fi
 
-root_dir = os.environ['TIMEGATE_ROOT']
-deploy   = os.environ['TIMEGATE_DIR']
-manifest_path = os.path.join(root_dir, 'imsmanifest.xml')
+if [ -n "$TIMEGATE_CONFIG" ]; then
+  if [ ! -f "$TIMEGATE_CONFIG" ]; then
+    echo "Timegate config not found: $TIMEGATE_CONFIG" >&2
+    exit 1
+  fi
+  TIMEGATE_CONFIG="$(CDPATH= cd -- "$(dirname -- "$TIMEGATE_CONFIG")" && pwd)/$(basename "$TIMEGATE_CONFIG")"
+fi
 
-ns = {
-    'imscp': 'http://www.imsproject.org/xsd/imscp_rootv1p1p2',
-    'adlcp': 'http://www.adlnet.org/xsd/adlcp_rootv1p2',
-}
-try:
-    tree = ET.parse(manifest_path)
-except Exception as e:
-    print('Failed to parse imsmanifest.xml:', e); sys.exit(1)
+echo "Inspecting and instrumenting the package..."
+if [ -n "$TIMEGATE_CONFIG" ]; then
+  SCORM_TELEMETRY_ENDPOINT="$TELEMETRY_ENDPOINT" \
+  SCORM_SOURCE_KEY_ID="$SOURCE_KEY_ID" \
+  SCORM_PILOT_TOKEN="$PILOT_TOKEN" \
+  PAYCOM_COURSE_ID="$PAYCOM_ID" \
+    "$PYTHON_BIN" -B "$INSTRUMENTER" \
+      --source-root "$PROJECT_ROOT" \
+      --timegate-config "$TIMEGATE_CONFIG" \
+      "$ROOT_DIR"
+else
+  SCORM_TELEMETRY_ENDPOINT="$TELEMETRY_ENDPOINT" \
+  SCORM_SOURCE_KEY_ID="$SOURCE_KEY_ID" \
+  SCORM_PILOT_TOKEN="$PILOT_TOKEN" \
+  PAYCOM_COURSE_ID="$PAYCOM_ID" \
+    "$PYTHON_BIN" -B "$INSTRUMENTER" \
+      --source-root "$PROJECT_ROOT" \
+      "$ROOT_DIR"
+fi
 
-root = tree.getroot()
-scorm_attr = '{%s}scormtype' % ns['adlcp']
-resource = next((r for r in root.findall('.//imscp:resource', ns)
-                 if r.get(scorm_attr) == 'sco'), None)
-if resource is None:
-    print('No SCO resource found in manifest.'); sys.exit(1)
-
-launch_href = resource.get('href')
-if not launch_href:
-    print('SCO resource does not specify href.'); sys.exit(1)
-
-launch_path = os.path.join(root_dir, launch_href)
-if not os.path.exists(launch_path):
-    print('Launch file not found:', launch_path); sys.exit(1)
-
-launch_dir = os.path.dirname(launch_path)
-rel_js  = os.path.relpath(os.path.join(root_dir, deploy, 'timegate.js'),  launch_dir).replace(os.sep, '/')
-rel_css = os.path.relpath(os.path.join(root_dir, deploy, 'timegate.css'), launch_dir).replace(os.sep, '/')
-
-with open(launch_path, 'r', encoding='utf-8') as f:
-    html = f.read()
-if 'data-timegate="true"' not in html:
-    inject_css = '  <link rel="stylesheet" href="%s" data-timegate="true">' % rel_css
-    inject_js  = '  <script defer src="%s" data-timegate="true"></script>' % rel_js
-    if '</head>' in html:
-        html = html.replace('</head>', inject_css + '\n' + inject_js + '\n</head>', 1)
-    elif '</body>' in html:
-        html = html.replace('</body>', inject_css + '\n' + inject_js + '\n</body>', 1)
-    else:
-        html += '\n' + inject_css + '\n' + inject_js + '\n'
-    with open(launch_path, 'w', encoding='utf-8') as f:
-        f.write(html)
-
-timegate_files = ['%s/timegate.js' % deploy, '%s/timegate.css' % deploy, '%s/timegate.config.json' % deploy]
-
-raw = open(manifest_path, 'rb').read()
-manifest_text = raw.decode('utf-8', errors='surrogateescape')
-newline = '\r\n' if b'\r\n' in raw else '\n'
-
-resource_re = re.compile(r'<(?P<prefix>\w+:)?resource\b[^>]*>', re.IGNORECASE)
-scorm_re = re.compile(r'\b[\w:]*scormtype\s*=\s*["\']sco["\']', re.IGNORECASE)
-href_re = re.compile(r'\bhref\s*=\s*["\']%s["\']' % re.escape(launch_href))
-
-resource_match = None
-for m in resource_re.finditer(manifest_text):
-    tag = m.group(0)
-    if not scorm_re.search(tag): continue
-    if launch_href and not href_re.search(tag): continue
-    resource_match = m; break
-if resource_match is None:
-    print('Failed to locate SCO resource in manifest text.'); sys.exit(1)
-
-prefix = resource_match.group('prefix') or ''
-close_tag = '</%sresource>' % prefix
-close_idx = manifest_text.find(close_tag, resource_match.end())
-if close_idx == -1:
-    print('Failed to locate closing tag for SCO resource.'); sys.exit(1)
-
-resource_block = manifest_text[resource_match.end():close_idx]
-missing = [h for h in timegate_files
-           if not re.search(r'\bhref\s*=\s*["\']%s["\']' % re.escape(h), resource_block)]
-
-if missing:
-    indent = '  '
-    for m in re.finditer(r'^(?P<indent>[ \t]*)<%sfile\b' % re.escape(prefix), resource_block, re.MULTILINE):
-        indent = m.group('indent')
-    space_before_slash = True
-    sample = None
-    for m in re.finditer(r'<%sfile\b[^>]*?/>' % re.escape(prefix), resource_block):
-        sample = m
-    if sample:
-        space_before_slash = ' />' in sample.group(0)
-
-    def tag(href):
-        return ('%s<%sfile href="%s" />' if space_before_slash else '%s<%sfile href="%s"/>') % (indent, prefix, href)
-
-    tail = re.search(r'[ \t]*$', resource_block).group(0)
-    insert_pos = close_idx - len(tail)
-    before = manifest_text[:insert_pos]
-    lead = newline if not before.endswith(('\n', '\r\n')) else ''
-    insertion = lead + newline.join(tag(h) for h in missing) + newline
-    manifest_text = manifest_text[:insert_pos] + insertion + manifest_text[insert_pos:]
-    with open(manifest_path, 'wb') as f:
-        f.write(manifest_text.encode('utf-8', errors='surrogateescape'))
-
-print('Timegate runtime installed into %s/ and registered in manifest (launch: %s)' % (deploy, launch_href))
-PY
-
-# ---- 3. Zip the package (write to temp, then move; mounts are slow) ----------
 if ! command -v zip >/dev/null 2>&1; then
-  echo "zip command not found; runtime is installed but no zip was produced."
+  echo "zip command not found; runtimes are installed but no ZIP was produced."
   exit 0
 fi
+
 BASE_NAME="$(basename "$ROOT_DIR")"
 OUTPUT_ZIP="$(dirname "$ROOT_DIR")/${BASE_NAME}-timegate.zip"
-TMP_ZIP="$(mktemp -d)/${BASE_NAME}-timegate.zip"
-echo "Creating zip: $OUTPUT_ZIP"
-( cd "$ROOT_DIR" && zip -r -q "$TMP_ZIP" . -x "*.DS_Store" -x "__MACOSX/*" )
+ZIP_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/timegate-zip.XXXXXX")"
+cleanup_zip_temp() {
+  rm -rf "$ZIP_TEMP_DIR"
+}
+trap cleanup_zip_temp EXIT HUP INT TERM
+TMP_ZIP="$ZIP_TEMP_DIR/${BASE_NAME}-timegate.zip"
+
+echo "Creating ZIP: $OUTPUT_ZIP"
+(
+  cd "$ROOT_DIR"
+  zip -r -q "$TMP_ZIP" . -x "*.DS_Store" -x "__MACOSX/*"
+)
 mv "$TMP_ZIP" "$OUTPUT_ZIP"
 echo "Done."

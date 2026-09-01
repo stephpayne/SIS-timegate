@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Probe fixture</title>
+    <style>
+      body { font: 16px/1.4 system-ui, sans-serif; margin: .75rem; }
+      button { margin: 0 .5rem .5rem 0; padding: .5rem .75rem; }
+      video { display: block; height: auto; max-width: 100%; }
+    </style>
+    <script src="../../../src/observability/content-probe.js"></script>
+  </head>
+  <body>
+    <p>This frame exercises the networking-free content probe.</p>
+    <button id="change-route" onclick="history.pushState({}, '', '#/lessons/Jack%20Casica%20selected%20sprinkler')">Change route</button>
+    <button id="throw-error" onclick="setTimeout(function () { throw new Error('Synthetic Learner selected sprinkler'); }, 0)">Throw error</button>
+    <button id="reject-promise" onclick="Promise.reject(new Error('Synthetic Learner selected sprinkler'))">Reject promise</button>
+    <button id="fail-resource" onclick="var image = document.createElement('img'); image.src = '/missing/Jack%20Casica%20selected%20sprinkler.png?token=Jack-Casica'; document.body.appendChild(image)">Fail resource</button>
+    <button id="media-events" onclick="var video = document.getElementById('probe-video'); ['play', 'stalled', 'error', 'ended'].forEach(function (name) { video.dispatchEvent(new Event(name, { bubbles: true })); })">Media events</button>
+    <video id="probe-video" controls width="320" data-block-id="video-block-1"></video>
+  </body>
+</html>

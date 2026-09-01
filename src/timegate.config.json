@@ -1,6 +1,7 @@
 {
   // Per-course setting
   "minRequiredMinutes": 1,                 // required floor time before completion
+  "maxAllowedMinutes": null,               // optional cumulative active-time cap; null disables it
 
   // Shared defaults — change only with an understanding of the runtime
   // behavior (see MAINTAINING.md).

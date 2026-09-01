@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Timegate production-order harness</title>
+    <script>
+      (function () {
+        'use strict';
+
+        var values = {
+          'cmi.core.student_id': 'PRODUCTION-ORDER-LEARNER',
+          'cmi.core.lesson_status': 'incomplete',
+          'cmi.suspend_data': ''
+        };
+        var calls = [];
+        var initialized = false;
+
+        function record() {
+          calls.push(Array.prototype.slice.call(arguments));
+        }
+
+        window.API = {
+          LMSInitialize: function () {
+            record('LMSInitialize');
+            initialized = true;
+            return 'true';
+          },
+          LMSGetValue: function (element) {
+            record('LMSGetValue', element);
+            if (!initialized) return '';
+            return Object.prototype.hasOwnProperty.call(values, element) ?
+              values[element] : '';
+          },
+          LMSSetValue: function (element, value) {
+            record('LMSSetValue', element, value);
+            if (!initialized) return 'false';
+            values[element] = String(value);
+            return 'true';
+          },
+          LMSCommit: function () {
+            record('LMSCommit');
+            return initialized ? 'true' : 'false';
+          },
+          LMSFinish: function () {
+            record('LMSFinish');
+            initialized = false;
+            return 'true';
+          }
+        };
+
+        window.SCORM_objAPI = window.API;
+        window.SCORM_CallLMSInitialize = function (value) {
+          return window.API.LMSInitialize(value);
+        };
+        window.SCORM_CallLMSSetValue = function (element, value) {
+          return window.API.LMSSetValue(element, value);
+        };
+
+        window.productionOrderHarness = {
+          calls: calls,
+          values: values,
+          booted: false
+        };
+
+        document.addEventListener('DOMContentLoaded', function () {
+          window.SCORM_CallLMSInitialize('');
+          window.SCORM_CallLMSSetValue(
+            'cmi.core.lesson_status',
+            'completed'
+          );
+          window.productionOrderHarness.booted = true;
+        });
+      })();
+    </script>
+    <script src="../../../src/timegate.js"></script>
+  </head>
+  <body>
+    <h1>Timegate production-order harness</h1>
+  </body>
+</html>

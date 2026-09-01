@@ -1,7 +1,14 @@
 # Build artifacts
 *-timegate.zip
 *.tmp
+__pycache__/
+*.py[cod]
 
 # OS noise
 .DS_Store
 Thumbs.db
+
+# Local test tooling
+node_modules/
+playwright-report/
+test-results/
