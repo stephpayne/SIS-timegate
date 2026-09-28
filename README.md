@@ -69,6 +69,12 @@ See
 [`installer/SCORM-OBSERVABILITY.md`](./installer/SCORM-OBSERVABILITY.md)
 for the pilot package contract, privacy boundary, and non-interactive options.
 
+### Raycast installer
+
+For Timegate without telemetry, follow the [Raycast setup guide](docs/raycast-setup.md).
+Install the small launcher once so Raycast uses the maintained installer in this
+checkout, including its local storage only option.
+
 ### Running the core packager directly
 
 The packagers can also be run against an already-unzipped course folder:
