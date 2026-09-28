@@ -72,10 +72,15 @@ function Get-DefaultSettings {
         idleTimeoutSeconds         = 120
         backgroundGraceSeconds     = 30
         launchModalEnabled         = $true
+        audioCuesEnabled           = $true
         hideWhenComplete           = $false
         position                   = 'bottom-right'
         storageMode                = 'dual'
         debug                      = $false
+        seatTimeReportingEnabled   = $false
+        seatTimeRelayUrl           = ''
+        seatTimeRelayKey           = ''
+        courseId                   = ''
     }
     return ,$settings
 }
@@ -123,8 +128,10 @@ function Get-ReviewText {
     $mediaActivity = if ($Settings['countWhileMediaPlaying']) { 'on' } else { 'off' }
     $videoSkip = if ($Settings['disableVideoSkip']) { 'blocked' } else { 'allowed' }
     $launchModal = if ($Settings['launchModalEnabled']) { 'on' } else { 'off' }
+    $audioCues = if ($Settings['audioCuesEnabled']) { 'available (learner starts with sound off)' } else { 'off' }
     $hideWhenComplete = if ($Settings['hideWhenComplete']) { 'hidden' } else { 'shown' }
     $debug = if ($Settings['debug']) { 'on' } else { 'off' }
+    $seatTime = if ($Settings['seatTimeReportingEnabled']) { 'on' } else { 'off' }
 
     if ($Settings['inactivityForceExitEnabled']) {
         $inactivity = "End idle session after $($Settings['inactivityForceExitMinutes']) minutes"
@@ -157,9 +164,11 @@ $inactivity
 $warning
 $nudge
 Launch acknowledgment: $launchModal
+Optional sound cues: $audioCues
 Timer after floor is met: $hideWhenComplete
 Timer location: $($Settings['position'])
 Debug logging: $debug
+Seat-time relay: $seatTime
 Advanced settings: $advancedState
 
 A new ZIP will be created here:
@@ -175,8 +184,8 @@ function Show-AdvancedSettingsDialog {
     $advancedForm = New-Object System.Windows.Forms.Form
     $advancedForm.Text = 'Advanced Timegate Settings'
     $advancedForm.StartPosition = 'CenterParent'
-    $advancedForm.Size = New-Object System.Drawing.Size(710, 665)
-    $advancedForm.MinimumSize = New-Object System.Drawing.Size(710, 665)
+    $advancedForm.Size = New-Object System.Drawing.Size(710, 700)
+    $advancedForm.MinimumSize = New-Object System.Drawing.Size(710, 700)
     $advancedForm.MaximizeBox = $false
     $advancedForm.Font = New-Object System.Drawing.Font('Segoe UI', 9)
     $advancedForm.BackColor = [System.Drawing.Color]::White
@@ -371,7 +380,7 @@ function Show-AdvancedSettingsDialog {
     $displayGroup = New-Object System.Windows.Forms.GroupBox
     $displayGroup.Text = 'Display and diagnostics'
     $displayGroup.Location = New-Object System.Drawing.Point(24, 445)
-    $displayGroup.Size = New-Object System.Drawing.Size(645, 95)
+    $displayGroup.Size = New-Object System.Drawing.Size(645, 125)
     [void]$advancedForm.Controls.Add($displayGroup)
 
     $launchModal = New-Object System.Windows.Forms.CheckBox
@@ -410,21 +419,28 @@ function Show-AdvancedSettingsDialog {
     $debug.Checked = [bool]$Settings['debug']
     [void]$displayGroup.Controls.Add($debug)
 
+    $audioCueOption = New-Object System.Windows.Forms.CheckBox
+    $audioCueOption.Text = 'Offer optional sound cues (learners start with sound off)'
+    $audioCueOption.Location = New-Object System.Drawing.Point(16, 88)
+    $audioCueOption.Size = New-Object System.Drawing.Size(410, 24)
+    $audioCueOption.Checked = [bool]$Settings['audioCuesEnabled']
+    [void]$displayGroup.Controls.Add($audioCueOption)
+
     $reset = New-Object System.Windows.Forms.Button
     $reset.Text = 'Reset Defaults'
-    $reset.Location = New-Object System.Drawing.Point(24, 562)
+    $reset.Location = New-Object System.Drawing.Point(24, 597)
     $reset.Size = New-Object System.Drawing.Size(120, 32)
     [void]$advancedForm.Controls.Add($reset)
 
     $cancel = New-Object System.Windows.Forms.Button
     $cancel.Text = 'Cancel'
-    $cancel.Location = New-Object System.Drawing.Point(450, 562)
+    $cancel.Location = New-Object System.Drawing.Point(450, 597)
     $cancel.Size = New-Object System.Drawing.Size(100, 32)
     [void]$advancedForm.Controls.Add($cancel)
 
     $save = New-Object System.Windows.Forms.Button
     $save.Text = 'Save Settings'
-    $save.Location = New-Object System.Drawing.Point(560, 562)
+    $save.Location = New-Object System.Drawing.Point(560, 597)
     $save.Size = New-Object System.Drawing.Size(110, 32)
     $save.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
     [void]$advancedForm.Controls.Add($save)
@@ -459,6 +475,7 @@ function Show-AdvancedSettingsDialog {
         $gentleNudge.Checked = [bool]$defaults['gentleNudgeEnabled']
         $gentleSeconds.Value = [decimal][int]$defaults['gentleNudgeSeconds']
         $launchModal.Checked = [bool]$defaults['launchModalEnabled']
+        $audioCueOption.Checked = [bool]$defaults['audioCuesEnabled']
         $hideWhenComplete.Checked = [bool]$defaults['hideWhenComplete']
         $position.SelectedItem = [string]$defaults['position']
         $debug.Checked = [bool]$defaults['debug']
@@ -480,6 +497,7 @@ function Show-AdvancedSettingsDialog {
         $Settings['gentleNudgeEnabled'] = [bool]$gentleNudge.Checked
         $Settings['gentleNudgeSeconds'] = [int]$gentleSeconds.Value
         $Settings['launchModalEnabled'] = [bool]$launchModal.Checked
+        $Settings['audioCuesEnabled'] = [bool]$audioCueOption.Checked
         $Settings['hideWhenComplete'] = [bool]$hideWhenComplete.Checked
         $Settings['position'] = [string]$position.SelectedItem
         $Settings['debug'] = [bool]$debug.Checked
@@ -792,31 +810,6 @@ $install.Add_Click({
     }
     $outputZip = Join-Path $inputFolder "$outputStem.zip"
 
-    $review = Get-ReviewText -Minutes $floorMinutes -MaximumMinutes $maximumMinutes -Settings $advancedSettings -OutputZip $outputZip
-
-    $decision = [System.Windows.Forms.MessageBox]::Show(
-        $review,
-        'Confirm Timegate settings',
-        [System.Windows.Forms.MessageBoxButtons]::YesNo,
-        [System.Windows.Forms.MessageBoxIcon]::Question
-    )
-
-    if ($decision -ne [System.Windows.Forms.DialogResult]::Yes) {
-        return
-    }
-
-    if (Test-Path -LiteralPath $outputZip) {
-        $replace = [System.Windows.Forms.MessageBox]::Show(
-            "A Timegate ZIP already exists here:`n$outputZip`n`nReplace it?",
-            'Replace existing output?',
-            [System.Windows.Forms.MessageBoxButtons]::YesNo,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        )
-        if ($replace -ne [System.Windows.Forms.DialogResult]::Yes) {
-            return
-        }
-    }
-
     $tempRoot = $null
     try {
         $install.Enabled = $false
@@ -832,9 +825,14 @@ $install.Add_Click({
         $scormRoot = Find-ScormRoot $tempRoot
 
         $existingTimegate = Join-Path $scormRoot 'timegate'
+        $packageConfig = Join-Path $existingTimegate 'timegate.config.json'
+        $packageSettings = Get-TimegatePackageSettings `
+            -Settings $advancedSettings `
+            -ExistingConfigPath $packageConfig
+
         if (Test-Path -LiteralPath $existingTimegate) {
             $updateExisting = [System.Windows.Forms.MessageBox]::Show(
-                "This package already appears to contain Timegate.`n`nThe current timer files and settings will be refreshed in the new output ZIP. Continue?",
+                "This package already appears to contain Timegate.`n`nThe current timer files and settings will be refreshed in the new output ZIP. Any existing seat-time relay settings will be preserved. Continue?",
                 'Timegate already found',
                 [System.Windows.Forms.MessageBoxButtons]::YesNo,
                 [System.Windows.Forms.MessageBoxIcon]::Warning
@@ -845,13 +843,37 @@ $install.Add_Click({
             }
         }
 
+        $review = Get-ReviewText -Minutes $floorMinutes -MaximumMinutes $maximumMinutes -Settings $packageSettings -OutputZip $outputZip
+        $decision = [System.Windows.Forms.MessageBox]::Show(
+            $review,
+            'Confirm Timegate settings',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question
+        )
+        if ($decision -ne [System.Windows.Forms.DialogResult]::Yes) {
+            $status.Text = 'Canceled. No files were changed.'
+            return
+        }
+
+        if (Test-Path -LiteralPath $outputZip) {
+            $replace = [System.Windows.Forms.MessageBox]::Show(
+                "A Timegate ZIP already exists here:`n$outputZip`n`nReplace it?",
+                'Replace existing output?',
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+            if ($replace -ne [System.Windows.Forms.DialogResult]::Yes) {
+                $status.Text = 'Canceled. No files were changed.'
+                return
+            }
+        }
+
         $status.Text = 'Writing the confirmed Timegate settings...'
         $form.Refresh()
         [System.Windows.Forms.Application]::DoEvents()
 
         New-Item -ItemType Directory -Path $existingTimegate -Force | Out-Null
-        $packageConfig = Join-Path $existingTimegate 'timegate.config.json'
-        Write-Utf8NoBom $packageConfig (New-TimegateConfig -Minutes $floorMinutes -MaximumMinutes $maximumMinutes -Settings $advancedSettings)
+        Write-Utf8NoBom $packageConfig (New-TimegateConfig -Minutes $floorMinutes -MaximumMinutes $maximumMinutes -Settings $packageSettings)
 
         $status.Text = 'Adding Timegate and rebuilding the ZIP...'
         $form.Refresh()

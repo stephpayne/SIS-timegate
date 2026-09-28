@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8">
     <title>Timegate production-order harness</title>
+    <link rel="stylesheet" href="../../../src/timegate.css">
     <script>
       (function () {
         'use strict';
@@ -30,6 +31,9 @@
             if (!initialized) return '';
             return Object.prototype.hasOwnProperty.call(values, element) ?
               values[element] : '';
+          },
+          LMSGetLastError: function () {
+            return initialized ? '0' : '301';
           },
           LMSSetValue: function (element, value) {
             record('LMSSetValue', element, value);

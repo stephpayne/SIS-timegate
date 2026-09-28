@@ -126,6 +126,32 @@ function Assert-TimegateNumber(
   }
 }
 
+function Assert-TimegateRelayUrl([string]$Value) {
+  if ([string]::IsNullOrEmpty($Value)) { return }
+  if ($Value -match '\s') {
+    throw 'seatTimeRelayUrl must be an absolute HTTPS URL'
+  }
+
+  $uri = $null
+  if (
+    -not [System.Uri]::TryCreate($Value, [System.UriKind]::Absolute, [ref]$uri) -or
+    [string]::IsNullOrWhiteSpace($uri.Host)
+  ) {
+    throw 'seatTimeRelayUrl must be an absolute HTTPS URL'
+  }
+
+  $scheme = $uri.Scheme.ToLowerInvariant()
+  if ($scheme -eq 'https') { return }
+  $hostName = $uri.Host.Trim([char[]]'[]').ToLowerInvariant()
+  if (
+    $scheme -eq 'http' -and
+    @('localhost', '127.0.0.1', '::1') -ccontains $hostName
+  ) {
+    return
+  }
+  throw 'seatTimeRelayUrl must use HTTPS (HTTP is allowed only for loopback development)'
+}
+
 function Read-TimegateConfig([string]$Path) {
   try {
     $raw = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8).TrimStart([char]0xFEFF)
@@ -148,15 +174,21 @@ function Assert-TimegateConfig([string]$Path) {
   $config = Read-TimegateConfig $Path
 
   $booleanFields = @(
-    'countWhileMediaPlaying', 'debug', 'disableVideoSkip',
+    'audioCuesEnabled', 'countWhileMediaPlaying', 'debug', 'disableVideoSkip',
     'enforceCompletion', 'gentleNudgeEnabled', 'hideWhenComplete',
-    'inactivityForceExitEnabled', 'launchModalEnabled'
+    'inactivityForceExitEnabled', 'launchModalEnabled',
+    'seatTimeReportingEnabled'
   )
   $numericFields = @(
     'minRequiredMinutes', 'idleTimeoutSeconds', 'backgroundGraceSeconds',
     'inactivityForceExitMinutes', 'inactivityWarningSeconds', 'gentleNudgeSeconds'
   )
-  $allowedFields = @($booleanFields + $numericFields + @(
+  $stringLimits = [ordered]@{
+    seatTimeRelayUrl = 2048
+    seatTimeRelayKey = 512
+    courseId = 256
+  }
+  $allowedFields = @($booleanFields + $numericFields + @($stringLimits.Keys) + @(
     'courseKey', 'maxAllowedMinutes', 'position', 'storageMode'
   ))
   $unknown = @($config.PSObject.Properties | Where-Object {
@@ -178,6 +210,36 @@ function Assert-TimegateConfig([string]$Path) {
     $property = Get-TimegateProperty $config $name
     if ($null -ne $property -and $property.Value -isnot [bool]) {
       throw "$name must be true or false"
+    }
+  }
+
+  foreach ($name in $stringLimits.Keys) {
+    $property = Get-TimegateProperty $config $name
+    if ($null -eq $property) { continue }
+    if ($property.Value -isnot [string]) {
+      throw "$name must be a string"
+    }
+    if ($property.Value.Length -gt $stringLimits[$name]) {
+      throw "$name must not exceed $($stringLimits[$name]) characters"
+    }
+  }
+
+  $relayUrl = Get-TimegateProperty $config 'seatTimeRelayUrl'
+  if ($null -ne $relayUrl) {
+    Assert-TimegateRelayUrl ([string]$relayUrl.Value)
+  }
+
+  $seatTimeEnabled = Get-TimegateProperty $config 'seatTimeReportingEnabled'
+  if ($null -ne $seatTimeEnabled -and $seatTimeEnabled.Value -eq $true) {
+    foreach ($name in @('seatTimeRelayUrl', 'seatTimeRelayKey', 'courseId')) {
+      $property = Get-TimegateProperty $config $name
+      if (
+        $null -eq $property -or
+        $property.Value -isnot [string] -or
+        [string]::IsNullOrWhiteSpace($property.Value)
+      ) {
+        throw "$name is required when seatTimeReportingEnabled is true"
+      }
     }
   }
 
@@ -215,6 +277,40 @@ function Assert-TimegateConfig([string]$Path) {
     }
   }
   return $config
+}
+
+function Get-TimegatePackageSettings {
+  param(
+    [System.Collections.IDictionary]$Settings,
+    [AllowNull()][string]$ExistingConfigPath
+  )
+
+  $packageSettings = [ordered]@{}
+  foreach ($key in $Settings.Keys) {
+    $packageSettings[$key] = $Settings[$key]
+  }
+
+  if (
+    [string]::IsNullOrWhiteSpace($ExistingConfigPath) -or
+    -not (Test-Path -LiteralPath $ExistingConfigPath -PathType Leaf)
+  ) {
+    return ,$packageSettings
+  }
+
+  $existingConfig = Assert-TimegateConfig $ExistingConfigPath
+  foreach ($name in @(
+    'seatTimeReportingEnabled',
+    'seatTimeRelayUrl',
+    'seatTimeRelayKey',
+    'courseId'
+  )) {
+    $property = Get-TimegateProperty $existingConfig $name
+    if ($null -ne $property) {
+      $packageSettings[$name] = $property.Value
+    }
+  }
+
+  return ,$packageSettings
 }
 
 function Get-TimegateSha256Hex([byte[]]$Bytes) {

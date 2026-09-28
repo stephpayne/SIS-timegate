@@ -42,12 +42,13 @@ The runtime configuration file is `src/timegate.config.json`. It supports `//`
 comments and trailing commas. `minRequiredMinutes` and `maxAllowedMinutes` are
 per-course values. The remaining values are shared defaults.
 
-Keep these four locations aligned when changing a default:
+Keep these five locations aligned when changing a default:
 
 1. `DEFAULT_CONFIG` in `src/timegate.js`
 2. `src/timegate.config.json`
 3. `Get-DefaultSettings` in `installer/Timegate-Installer.ps1`
 4. `write_default_config` in `installer/Timegate-Installer.command`
+5. `write_config` in `installer/raycast-timegate-installer.sh`
 
 The per-course floor and maximum also appear as primary controls in both GUI
 installers. Keep their validation, review text, and generated configuration in
@@ -62,9 +63,44 @@ invalid value must never be coerced into a setting that weakens completion
 enforcement. `minRequiredMinutes: 0` remains an explicit supported value for
 maximum-only courses; it is distinct from a missing or invalid setting.
 
+Audio- and seat-time-only settings are exceptions to global runtime blocking.
+Packagers reject invalid optional settings before writes, but malformed audio
+configuration that reaches the browser disables only sound. A malformed relay
+setting disables only the reporter and emits a diagnostic. Neither path may set
+`configurationBlocked` or change LMS completion behavior.
+
 The GUI installers carry their own copy of the defaults, so they must be kept in
 sync with the runtime configuration whenever a default changes. A future refactor
 could have both installers read from `src/timegate.config.json` directly.
+
+Seat-time configuration has an additional parity contract. Keep the runtime,
+Python, and PowerShell validators aligned on these limits:
+
+- `seatTimeReportingEnabled` is boolean.
+- `seatTimeRelayUrl` is a string of at most 2,048 characters.
+- `seatTimeRelayKey` is a string of at most 512 characters.
+- `courseId` is a string of at most 256 characters.
+- When reporting is enabled, the URL, key, and Clean Course ID are all nonempty.
+  The URL uses HTTPS, except for HTTP loopback endpoints used only in development.
+
+The generated defaults stay disabled with all three string values empty. Do not
+add relay keys to command-line arguments, environment variables, review text, or
+installer output. `courseId` is relay data; never substitute the generated
+`courseKey`.
+
+Audio configuration has one package-level capability flag:
+
+- `audioCuesEnabled` is boolean. `true` offers learner controls; it does not grant
+  playback consent.
+- Learner playback always starts off unless that verified learner and course
+  already have an explicit local preference.
+- Store the preference only in learner-and-course-scoped browser `localStorage`,
+  never unresolved state, persisted learner state, LMS `suspend_data`,
+  observability snapshots, or relay payloads.
+- Audio failures are fail-open. They must never delay or alter timing, completion,
+  persistence, ownership, finalization, termination, or seat-time delivery.
+- Keep cues synthesized through Web Audio. Adding `<audio>` elements would make
+  Timegate's media detector mistake its own feedback for course media.
 
 ## Values that are not release numbers
 
@@ -86,6 +122,16 @@ could have both installers read from `src/timegate.config.json` directly.
 - Return synthetic queued success only after the pending completion or Finish is
   durably stored. Persist deferred Finish state until finalization and termination
   are both acknowledged.
+- Persist the inactivity relaunch notice before Finish/Terminate, hydrate it only
+  for a verified learner/course resume, and never replay a failed inactivity
+  termination against the newly initialized LMS session.
+- Only the current learner/course lock owner may force an inactivity exit, present
+  or acknowledge its relaunch notice, or resume tracking. Ownership takeover may
+  hydrate local state only when the LMS reports `resume`.
+- Reconcile dual-storage conflicts by monotonic `persistenceRevision` before the
+  legacy timestamp fallback. Keep the LMS form of the inactivity marker compact
+  and omit null optional fields so the notice does not consume avoidable
+  `suspend_data` headroom.
 - Resolve learner identity only after successful LMS initialization. Never read or
   merge an anonymous local backup into learner-scoped state.
 - Only the tab holding the verified learner/course lock may persist or release a
@@ -97,6 +143,47 @@ could have both installers read from `src/timegate.config.json` directly.
 - On a resumed observability document, require both an exact learner match and a
   live canonical completion read before releasing stored telemetry. Live LMS state
   always overrides a restored completion claim.
+
+## Seat-time relay invariants
+
+- Use the current launch's canonical Timegate active clock. Background time counts
+  only through `backgroundGraceSeconds`; do not create an independent timer with
+  different idle, media, focus, or primary-tab rules.
+- Do not send until the LMS has initialized and learner identity is verified. Keep
+  the relay's Clean `courseId` separate from package-state `courseKey`.
+- Fresh GUI and Raycast packages must keep relay reporting disabled. The Windows
+  GUI may preserve the four validated seat-time fields from an existing package,
+  but must not display or log their URL, key, or course ID.
+- Persist the latest snapshot before transmission in a bounded outbox scoped to
+  relay, course, learner, and attempt. The outbox uses per-attempt/revision
+  `localStorage` records so tab handoff cannot overwrite another attempt. Serialize
+  delivery and clear only the exact revision acknowledged with `{ "ok": true }`;
+  an older response must not clear or overwrite newer seat time. If `localStorage`
+  is unavailable, disable delivery and emit only a privacy-safe diagnostic.
+- Freeze an attempt on lock loss, inactivity or maximum exit, successful
+  termination, and `pagehide`; start a new attempt after ownership returns.
+  `activeSeconds` is the canonical Timegate active delta for that owned segment,
+  including configured background grace. `totalSeconds` is segment wall time and
+  `idleSeconds = totalSeconds - activeSeconds`. Preserve monotonic active, idle,
+  and total maxima if the system wall clock moves backward.
+- Persist a confirmed completion timestamp with same-learner Timegate state. Send
+  it only with `completed: true`; send explicit `null` otherwise so the relay can
+  clear a stale Airtable value after a reset.
+- Treat relay delivery as fail-open for LMS behavior. Fetch, beacon, CORS, storage,
+  relay, and seat-time configuration failures remain retryable or diagnostic only;
+  they never set global configuration blocking, mutate LMS state, or attest SCORM
+  completion.
+- The packaged shared key and CORS policy do not authenticate the learner, course,
+  or elapsed time. Rotate any exposed key, including the value shared in the
+  implementation thread, before production.
+- Before an assigned-learner canary, use synthetic reordered and concurrent
+  submissions to prove the relay applies revisions atomically and monotonically.
+  `{ "ok": true }` must mean the revision was durably applied or an equal/higher
+  valid revision already covers it. Never order by client `reportedAt`; prevent a
+  legacy request without `revision` from overwriting a revisioned row. Then require
+  one assigned-learner LMS canary before rollout to verify the real course origin
+  and readable CORS, exact identifiers, one row per attempt, explicit-null
+  completion clearing, and the intended Airtable Enrollment link projection.
 
 ## Scope: single-SCO packages
 

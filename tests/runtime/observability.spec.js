@@ -282,7 +282,7 @@ test('Timegate persists and enforces an optional cumulative maximum', async ({ b
       Boolean(document.getElementById('timegate-root')),
   );
   await expect(page.locator('#timegate-root .timegate-ring-label')).toHaveText(
-    'Min met',
+    'Time elapsed',
   );
   await expect(page.locator('#timegate-root .timegate-ring-value')).toHaveText(
     '0:00',
@@ -307,7 +307,7 @@ test('Timegate persists and enforces an optional cumulative maximum', async ({ b
       ),
     );
   });
-  await page.locator('#complete').click();
+  await page.evaluate(() => window.localLmsHarness.complete());
 
   const result = await page.evaluate(() => ({
     calls: window.localLmsHarness.calls,
@@ -347,15 +347,24 @@ test('Timegate persists and enforces an optional cumulative maximum', async ({ b
   await invalidContext.close();
 });
 
-test('Timegate ring places Min on the Max scale and cycles compact details', async ({ page }) => {
+test('Timegate ring places Min on the Max scale and highlights each carousel detail', async ({ page }) => {
   await openHarness(page, '?timegate=ring');
   await page.waitForFunction(
     () =>
       window.localLmsHarness.timegateReady &&
       Boolean(document.getElementById('timegate-root')),
   );
-
   const root = page.locator('#timegate-root');
+  expect(
+    await page.evaluate(() => ({
+      linked: Array.from(document.styleSheets).some(
+        (sheet) => sheet.href && sheet.href.endsWith('/src/timegate.css'),
+      ),
+      ringWidth: getComputedStyle(
+        document.querySelector('#timegate-root .timegate-ring'),
+      ).width,
+    })),
+  ).toEqual({ linked: true, ringWidth: '112px' });
   await expect(root.locator('.timegate-ring-marker')).toHaveAttribute(
     'transform',
     'rotate(96.00 50 50)',
@@ -365,17 +374,83 @@ test('Timegate ring places Min on the Max scale and cycles compact details', asy
     /Min required 20:00\. Max allowed 1:15:00/,
   );
   await expect(root.locator('.timegate-ring-dot')).toHaveCount(3);
-  await expect(root.locator('.timegate-ring-label')).toHaveText('Min left');
+  await expect(root.locator('.timegate-ring-label')).toHaveText('Time elapsed');
+  await expect(root.locator('.timegate-ring')).toHaveAttribute(
+    'data-carousel-focus',
+    'elapsed',
+  );
+  await expect(root.locator('.timegate-ring')).toHaveAttribute(
+    'data-carousel-pulse',
+    'elapsed',
+  );
+  await expect(root.locator('.timegate-ring-fill')).toHaveCSS(
+    'animation-name',
+    'timegate-ring-fill-focus',
+  );
+  await expect(root.locator('.timegate-ring-fill')).toHaveCSS(
+    'animation-delay',
+    '0.18s',
+  );
 
   const center = root.locator('.timegate-ring-center');
   await center.click();
   await expect(center).toHaveClass(/timegate-ring-changing/);
   await expect(root.locator('.timegate-ring-label')).toHaveText('Min required');
   await expect(root.locator('.timegate-ring-value')).toHaveText('20:00');
+  await expect(root.locator('.timegate-ring')).toHaveAttribute(
+    'data-carousel-focus',
+    'minimum',
+  );
+  await expect(root.locator('.timegate-ring')).toHaveAttribute(
+    'data-carousel-pulse',
+    'minimum',
+  );
+  await expect(root.locator('.timegate-ring-marker')).toHaveCSS(
+    'animation-name',
+    'timegate-ring-marker-focus',
+  );
 
   await center.click();
   await expect(root.locator('.timegate-ring-label')).toHaveText('Max allowed');
   await expect(root.locator('.timegate-ring-value')).toHaveText('1:15:00');
+  await expect(root.locator('.timegate-ring')).toHaveAttribute(
+    'data-carousel-focus',
+    'maximum',
+  );
+  await expect(root.locator('.timegate-ring')).toHaveAttribute(
+    'data-carousel-pulse',
+    'maximum',
+  );
+  await expect(root.locator('.timegate-ring-track')).toHaveCSS(
+    'animation-name',
+    'timegate-ring-track-focus',
+  );
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(root.locator('.timegate-ring-track')).toHaveCSS(
+    'animation-name',
+    'none',
+  );
+  await expect(root.locator('.timegate-ring-track')).toHaveCSS(
+    'stroke-width',
+    '9.75px',
+  );
+
+  await page.waitForTimeout(750);
+  await expect(root.locator('.timegate-ring')).not.toHaveAttribute(
+    'data-carousel-pulse',
+    /.+/,
+  );
+  await center.click();
+  await expect(root.locator('.timegate-ring-label')).toHaveText('Time elapsed');
+  await expect(root.locator('.timegate-ring')).not.toHaveAttribute(
+    'data-carousel-pulse',
+    /.+/,
+  );
+  await expect(root.locator('.timegate-ring-fill')).toHaveCSS(
+    'animation-name',
+    'none',
+  );
 });
 
 test('Timegate cancels queued completion when the course resets to incomplete', async ({ browser }) => {
@@ -511,6 +586,176 @@ test('production boot cannot report completion while Timegate config is delayed'
   ).toBe(false);
   expect(atCourseBoot.status).toBe('incomplete');
   expect(afterTimegate.status).toBe('incomplete');
+});
+
+test('production bootstrap preserves the Timegate checkpoint in a Rise resume write while config is delayed', async ({ page }) => {
+  const checkpoint = {
+    version: 1,
+    persistenceRevision: 7,
+    courseKey: 'production-order-course',
+    learnerKey: 'PRODUCTION-ORDER-LEARNER',
+    elapsedSeconds: 600,
+    minRequiredSeconds: 60,
+    lastTickTs: 1_700_000_000_000,
+    courseCompleteSent: false,
+    courseCompletePending: false,
+  };
+  const seededRaw = JSON.stringify({
+    v: 3,
+    d: 'prior-rise-data',
+    __timegate_v2: checkpoint,
+  });
+  await page.addInitScript((raw) => {
+    let harness;
+    Object.defineProperty(window, 'productionOrderHarness', {
+      configurable: true,
+      get() { return harness; },
+      set(value) {
+        value.values['cmi.core.entry'] = 'resume';
+        value.values['cmi.suspend_data'] = raw;
+        harness = value;
+      },
+    });
+  }, seededRaw);
+
+  let releaseConfig;
+  const heldConfig = new Promise((resolve) => { releaseConfig = resolve; });
+  let configRequested = false;
+  await page.route('**/src/timegate.config.json', async (route) => {
+    configRequested = true;
+    await heldConfig;
+    await route.continue();
+  });
+
+  try {
+    await page.goto('/tests/runtime/harness/timegate-production-order.html', {
+      waitUntil: 'domcontentloaded',
+    });
+    await page.waitForFunction(() => window.productionOrderHarness.booted);
+    await expect.poll(() => configRequested).toBe(true);
+    const result = await page.evaluate(() => {
+      const authored = { v: 3, d: 'new-rise-resume-data' };
+      const before = JSON.parse(
+        window.productionOrderHarness.values['cmi.suspend_data'],
+      );
+      const writeResult = window.SCORM_CallLMSSetValue(
+        'cmi.suspend_data',
+        JSON.stringify(authored),
+      );
+      const after = JSON.parse(
+        window.productionOrderHarness.values['cmi.suspend_data'],
+      );
+      return {
+        after,
+        before,
+        entry: window.productionOrderHarness.values['cmi.core.entry'],
+        timegateReady: Boolean(document.getElementById('timegate-root')),
+        writeResult,
+      };
+    });
+
+    expect(result.entry).toBe('resume');
+    expect(result.timegateReady).toBe(false);
+    expect(result.writeResult).toBe('true');
+    expect(result.before.__timegate_v2).toEqual(checkpoint);
+    expect(result.after).toMatchObject({
+      v: 3,
+      d: 'new-rise-resume-data',
+      __timegate_v2: checkpoint,
+    });
+  } finally {
+    releaseConfig();
+  }
+});
+
+test('production bootstrap falls back to the exact Rise save when merged suspend data throws', async ({ page }) => {
+  const seededRaw = JSON.stringify({
+    v: 3,
+    d: 'prior-rise-data',
+    __timegate_v2: {
+      version: 1,
+      persistenceRevision: 7,
+      courseKey: 'production-order-course',
+      learnerKey: 'PRODUCTION-ORDER-LEARNER',
+      elapsedSeconds: 600,
+    },
+  });
+  await page.addInitScript((raw) => {
+    let api;
+    let harness;
+    window.__mergedSuspendThrows = 0;
+    Object.defineProperty(window, 'API', {
+      configurable: true,
+      get() { return api; },
+      set(value) {
+        const originalSetValue = value.LMSSetValue;
+        value.LMSSetValue = function (element, nextRaw) {
+          if (element === 'cmi.suspend_data') {
+            let parsed;
+            try {
+              parsed = JSON.parse(nextRaw);
+            } catch (error) {
+              parsed = null;
+            }
+            if (parsed && parsed.v === 3 && parsed.__timegate_v2) {
+              window.__mergedSuspendThrows += 1;
+              throw new Error('synthetic merged suspend-data rejection');
+            }
+          }
+          return originalSetValue.apply(this, arguments);
+        };
+        api = value;
+      },
+    });
+    Object.defineProperty(window, 'productionOrderHarness', {
+      configurable: true,
+      get() { return harness; },
+      set(value) {
+        value.values['cmi.core.entry'] = 'resume';
+        value.values['cmi.suspend_data'] = raw;
+        harness = value;
+      },
+    });
+  }, seededRaw);
+
+  let releaseConfig;
+  const heldConfig = new Promise((resolve) => { releaseConfig = resolve; });
+  await page.route('**/src/timegate.config.json', async (route) => {
+    await heldConfig;
+    await route.continue();
+  });
+
+  try {
+    await page.goto('/tests/runtime/harness/timegate-production-order.html', {
+      waitUntil: 'domcontentloaded',
+    });
+    await page.waitForFunction(() => window.productionOrderHarness.booted);
+    const result = await page.evaluate(() => {
+      const authoredRaw = JSON.stringify({
+        v: 3,
+        d: 'new-rise-resume-data',
+      });
+      const writeResult = window.SCORM_CallLMSSetValue(
+        'cmi.suspend_data',
+        authoredRaw,
+      );
+      return {
+        authoredSavedExactly:
+          window.productionOrderHarness.values['cmi.suspend_data'] ===
+            authoredRaw,
+        mergedThrows: window.__mergedSuspendThrows,
+        timegateReady: Boolean(document.getElementById('timegate-root')),
+        writeResult,
+      };
+    });
+
+    expect(result.timegateReady).toBe(false);
+    expect(result.mergedThrows).toBeGreaterThan(0);
+    expect(result.writeResult).toBe('true');
+    expect(result.authoredSavedExactly).toBe(true);
+  } finally {
+    releaseConfig();
+  }
 });
 
 test('production bootstrap terminates once on pagehide before config resolves', async ({ page }) => {
@@ -649,7 +894,7 @@ test('default dual storage does not import anonymous state for another learner',
   await page.locator('#initialize').click();
 
   await expect(page.locator('#timegate-root .timegate-ring-label')).toHaveText(
-    'Min left',
+    'Time elapsed',
   );
   await expect(page.locator('#timegate-root .timegate-ring-value')).not.toHaveText(
     '0:00',
@@ -677,7 +922,7 @@ test('Timegate visually hands off the modal timer and explains the live indicato
   await page.getByRole('button', { name: 'I understand' }).click();
   await expect(page.locator('#timegate-root')).toBeVisible();
   await expect(page.locator('#timegate-root .timegate-ring-label')).toHaveText(
-    'Min left',
+    'Time elapsed',
   );
   await expect(page.locator('#timegate-root .timegate-ring-value')).toContainText(
     ':',

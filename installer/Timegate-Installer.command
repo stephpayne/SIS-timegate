@@ -93,6 +93,24 @@ APPLESCRIPT
   done
 }
 
+ask_storage_mode() {
+  local choice
+  choice="$(osascript <<'APPLESCRIPT'
+try
+  set response to display dialog "Where should Timegate save its timer and pending state?" & return & return & "Local storage only: leaves course suspend data to Rise. Resume requires the same browser and device with saved browser data." & return & return & "LMS + browser: also saves Timegate state in the LMS shared suspend-data field." & return & return & "Course completion is still reported to the LMS in either mode." with title "Timegate Installer" buttons {"Cancel", "LMS + browser", "Local storage only"} default button "Local storage only"
+  return button returned of response
+on error number -128
+  return "Cancel"
+end try
+APPLESCRIPT
+)"
+  case "$choice" in
+    "Local storage only") printf 'localStorage' ;;
+    "LMS + browser") printf 'dual' ;;
+    *) return 1 ;;
+  esac
+}
+
 ask_telemetry_endpoint() {
   while true; do
     local value
@@ -202,6 +220,11 @@ write_default_config() {
   local minutes="$2"
   local max_minutes="$3"
 
+  local storage_mode="${4:-dual}"
+  case "$storage_mode" in
+    localStorage|dual|suspend_data) ;;
+    *) show_error "Invalid storage mode: $storage_mode"; return 1 ;;
+  esac
   cat > "$config_path" <<EOF
 {
   "minRequiredMinutes": $minutes,
@@ -217,10 +240,15 @@ write_default_config() {
   "idleTimeoutSeconds": 120,
   "backgroundGraceSeconds": 30,
   "launchModalEnabled": true,
+  "audioCuesEnabled": true,
   "hideWhenComplete": false,
   "position": "bottom-right",
-  "storageMode": "dual",
-  "debug": false
+  "storageMode": "$storage_mode",
+  "debug": false,
+  "seatTimeReportingEnabled": false,
+  "seatTimeRelayUrl": "",
+  "seatTimeRelayKey": "",
+  "courseId": ""
 }
 EOF
 }
@@ -241,7 +269,7 @@ normalize_smart_quotes() {
 }
 
 confirm_build() {
-  osascript - "$1" "$2" "$3" "$4" "$5" "$6" "$7" <<'APPLESCRIPT'
+  osascript - "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" <<'APPLESCRIPT'
 on run argv
   set theMinutes to item 1 of argv
   set theMaximum to item 2 of argv
@@ -250,6 +278,7 @@ on run argv
   set theEndpoint to item 5 of argv
   set theSourceKey to item 6 of argv
   set thePaycomCourse to item 7 of argv
+  set theStorageMode to item 8 of argv
   set msg to "Ready to create the Timegate package."
   set msg to msg & return & return & "Required floor time: " & theMinutes & " minutes"
   if theMaximum is "null" then
@@ -258,6 +287,7 @@ on run argv
     set msg to msg & return & "Maximum active time: " & theMaximum & " minutes"
   end if
   set msg to msg & return & "Settings: " & theSettings
+  set msg to msg & return & "Timegate persistence: " & theStorageMode
   set msg to msg & return & "Telemetry endpoint: " & theEndpoint
   set msg to msg & return & "Source-key ID: " & theSourceKey
   set msg to msg & return & "Paycom Course ID: " & thePaycomCourse
@@ -310,6 +340,7 @@ esac
 
 MINUTES="$(ask_minutes)" || exit 0
 MAX_ALLOWED_MINUTES="$(ask_max_minutes "$MINUTES")" || exit 0
+STORAGE_MODE="$(ask_storage_mode)" || exit 0
 TELEMETRY_ENDPOINT="$(ask_telemetry_endpoint)" || exit 0
 SOURCE_KEY_ID="$(ask_source_key_id)" || exit 0
 PILOT_TOKEN="$(ask_pilot_token)" || exit 0
@@ -352,7 +383,7 @@ fi
 MANIFEST_PATH="$(find "$EXTRACT_DIR" -type f -name "imsmanifest.xml" -print -quit)"
 SCORM_ROOT="$(dirname "$MANIFEST_PATH")"
 PACKAGE_CONFIG="$TEMP_ROOT/timegate.config.json"
-write_default_config "$PACKAGE_CONFIG" "$MINUTES" "$MAX_ALLOWED_MINUTES"
+write_default_config "$PACKAGE_CONFIG" "$MINUTES" "$MAX_ALLOWED_MINUTES" "$STORAGE_MODE"
 
 if [ "$MODE" = "Advanced Settings..." ]; then
   show_info "TextEdit will open the advanced settings. Change only values you understand, then save and close the TextEdit window. Timegate checks the file before packaging."
@@ -388,6 +419,9 @@ INPUT_DIR="$(dirname "$INPUT_ZIP")"
 OUTPUT_STEM="$INPUT_STEM-timegate"
 OUTPUT_ZIP="$INPUT_DIR/$OUTPUT_STEM.zip"
 
+# Read the final setting so advanced edits are reflected in the confirmation.
+STORAGE_MODE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("storageMode", "dual"))' "$PACKAGE_CONFIG")"
+
 DECISION="$(confirm_build \
   "$MINUTES" \
   "$MAX_ALLOWED_MINUTES" \
@@ -395,7 +429,8 @@ DECISION="$(confirm_build \
   "$OUTPUT_ZIP" \
   "$TELEMETRY_ENDPOINT" \
   "$SOURCE_KEY_ID" \
-  "$PAYCOM_COURSE_ID")"
+  "$PAYCOM_COURSE_ID" \
+  "$STORAGE_MODE")"
 if [ "$DECISION" != "Create Package" ]; then
   exit 0
 fi

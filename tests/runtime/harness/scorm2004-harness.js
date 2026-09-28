@@ -8,10 +8,18 @@
   var calls = harness.calls;
   var failure = harness.failure;
   var lifecycle = harness.lifecycle;
+  var learnerId = params.get('learner') || 'SCORM-2004-LEARNER';
+  var attemptMarker =
+    '__timegate_harness_scorm2004_attempt__' + floorMode + '|' + learnerId;
+  var isResumeLaunch = false;
+  try {
+    isResumeLaunch = window.sessionStorage.getItem(attemptMarker) === 'started';
+  } catch (error) {
+    isResumeLaunch = false;
+  }
 
-  values['cmi.learner_id'] =
-    params.get('learner') || 'SCORM-2004-LEARNER';
-  values['cmi.entry'] = 'ab-initio';
+  values['cmi.learner_id'] = learnerId;
+  values['cmi.entry'] = isResumeLaunch ? 'resume' : 'ab-initio';
   values['cmi.completion_status'] = 'incomplete';
   values['cmi.success_status'] = 'unknown';
   values['cmi.score.raw'] = '';
@@ -41,7 +49,14 @@
         !lifecycle.initialized &&
         !lifecycle.terminated
       );
-      if (succeeded) lifecycle.initialized = true;
+      if (succeeded) {
+        lifecycle.initialized = true;
+        try {
+          window.sessionStorage.setItem(attemptMarker, 'started');
+        } catch (error) {
+          // ignore harness storage failures
+        }
+      }
       return booleanResult(succeeded, 103);
     },
     GetValue: function (element) {
@@ -53,6 +68,9 @@
       window.intSCORMError = '0';
       return Object.prototype.hasOwnProperty.call(values, element) ?
         values[element] : '';
+    },
+    GetLastError: function () {
+      return window.intSCORMError;
     },
     SetValue: function (element, value) {
       recordCall('SetValue', element, value);
@@ -101,7 +119,7 @@
     failure.setValue = false;
     failure.commit = false;
     failure.finish = false;
-    values['cmi.entry'] = 'ab-initio';
+    values['cmi.entry'] = isResumeLaunch ? 'resume' : 'ab-initio';
     values['cmi.completion_status'] = 'incomplete';
     values['cmi.success_status'] = 'unknown';
     values['cmi.session_time'] = '';
@@ -146,10 +164,10 @@
     hideWhenComplete: false,
     position: 'bottom-right',
     debug: false,
-    storageMode: 'localStorage',
-    inactivityForceExitEnabled: false,
-    inactivityForceExitMinutes: 5,
-    inactivityWarningSeconds: 30,
+    storageMode: params.get('storage') || 'localStorage',
+    inactivityForceExitEnabled: params.get('idle') === '1',
+    inactivityForceExitMinutes: params.get('idle') === '1' ? 0.03 : 5,
+    inactivityWarningSeconds: params.get('idle') === '1' ? 0.5 : 30,
     gentleNudgeEnabled: false,
     launchModalEnabled: false,
     disableVideoSkip: false

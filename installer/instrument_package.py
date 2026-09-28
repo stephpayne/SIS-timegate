@@ -438,10 +438,42 @@ def _inject_content_probe(html: str, probe_src: str) -> str:
 
 
 def _inject_timegate(
-    html: str, js_src: str, css_href: str, state: str
+    html: str,
+    js_src: str,
+    css_href: str,
+    state: str,
+    storage_mode: str,
 ) -> str:
     if state == "complete":
-        return html
+        timegate_tag_pattern = re.compile(
+            r"<script\b"
+            r"(?=[^>]*\bsrc\s*=\s*[\"']"
+            + re.escape(js_src)
+            + r"[\"'])"
+            r"(?=[^>]*\bdata-timegate\s*=\s*[\"']true[\"'])"
+            r"[^>]*>",
+            re.IGNORECASE,
+        )
+        matches = list(timegate_tag_pattern.finditer(html))
+        if len(matches) != 1:
+            raise InstrumentationError(
+                "Expected exactly one existing Timegate script marker"
+            )
+        match = matches[0]
+        storage_marker = re.compile(
+            r"\s+data-timegate-storage-mode(?:\s*=\s*(?:"
+            r'"[^"]*"|\'[^\']*\'|[^\s>]+))?',
+            re.IGNORECASE,
+        )
+        updated_tag = storage_marker.sub("", match.group(0))
+        if storage_mode == "localStorage":
+            updated_tag = re.sub(
+                r"(?P<close>\s*/?>)$",
+                r' data-timegate-storage-mode="localStorage"\g<close>',
+                updated_tag,
+                count=1,
+            )
+        return html[: match.start()] + updated_tag + html[match.end() :]
     if html.count(OBSERVABILITY_END) != 1:
         raise InstrumentationError(
             "Timegate must be injected after one observability host block"
@@ -454,7 +486,13 @@ def _inject_timegate(
     block = (
         f'\n{indent}<link rel="stylesheet" href="{css_href}" '
         'data-timegate="true">\n'
-        f'{indent}<script src="{js_src}" data-timegate="true"></script>'
+        f'{indent}<script src="{js_src}" data-timegate="true"'
+        + (
+            ' data-timegate-storage-mode="localStorage"'
+            if storage_mode == "localStorage"
+            else ""
+        )
+        + '></script>'
     )
     return html[:anchor_end] + block + html[anchor_end:]
 
@@ -466,6 +504,7 @@ def _verify_rendered(
     expected_config_json: str,
     expected_timegate_js: str,
     expected_timegate_css: str,
+    expected_storage_mode: str,
 ) -> None:
     expected_driver = (
         driver_html.count(OBSERVABILITY_START),
@@ -542,6 +581,25 @@ def _verify_rendered(
     ):
         raise InstrumentationError(
             "Rendered Timegate tags must reference the exact packaged assets"
+        )
+    storage_marker_count = len(
+        re.findall(
+            r"\bdata-timegate-storage-mode(?:\s*=\s*(?:"
+            r'"[^"]*"|\'[^\']*\'|[^\s>]+))?',
+            timegate_tag.group(0),
+            re.IGNORECASE,
+        )
+    )
+    storage_marker_value = scripts[0].get("data-timegate-storage-mode")
+    if expected_storage_mode == "localStorage":
+        if storage_marker_count != 1 or storage_marker_value != "localStorage":
+            raise InstrumentationError(
+                "Local-only Timegate packages require exactly one synchronous "
+                "storage marker"
+            )
+    elif storage_marker_count != 0:
+        raise InstrumentationError(
+            "Non-local Timegate packages may not retain a local-only storage marker"
         )
     if not lms_tag.start() < host_tag.start() < timegate_tag.start():
         raise InstrumentationError(
@@ -755,6 +813,7 @@ def instrument_package(
         expected_timegate_js,
         expected_timegate_css,
         timegate_state,
+        str(effective_timegate_config.get("storageMode") or "dual"),
     )
     updated_content = _inject_content_probe(
         content_html, _relative_asset_path(probe_asset, content_path)
@@ -774,6 +833,7 @@ def instrument_package(
         rendered_config,
         expected_timegate_js,
         expected_timegate_css,
+        str(effective_timegate_config.get("storageMode") or "dual"),
     )
 
     for relative_path, source_path in source_files.items():
@@ -821,6 +881,7 @@ def instrument_package(
         rendered_config,
         expected_timegate_js,
         expected_timegate_css,
+        str(effective_timegate_config.get("storageMode") or "dual"),
     )
     return descriptor_with_paycom
 

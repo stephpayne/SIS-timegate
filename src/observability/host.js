@@ -20,6 +20,8 @@
   var MAX_EVENT_AGE_MS = 5 * 60 * 1000;
   var MAX_TAIL_EVENTS = 100;
   var MAX_TAIL_BYTES = 32 * 1024;
+  var MAX_PUBLIC_SUPPORT_ISSUES = 10;
+  var MAX_PUBLIC_SUPPORT_EVENTS = 20;
   var MAX_SAFE_SEQUENCE = 9007199254740991;
   var RESTORE_IDENTITY_TIMEOUT_MS = 2000;
   var ROUTINE_INTERVAL_MS = 60 * 1000;
@@ -52,6 +54,8 @@
   var channelPort = null;
   var transportInFlight = null;
   var latestQueuedTransport = null;
+  var telemetryDeliveryState = 'not_attempted';
+  var telemetryDeliveryRevision = 0;
   var completionWritten = false;
   var completionCommitted = false;
   var completionQueuedByTimegate = false;
@@ -1122,6 +1126,380 @@
     return selected;
   }
 
+  function publicTimestamp(value) {
+    var timestamp = Date.parse(value);
+    return isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+  }
+
+  function publicLifecycle(value) {
+    var allowed = {
+      active: true,
+      page_hidden: true,
+      terminated: true,
+      forced_exit: true
+    };
+    return allowed[value] ? value : 'unknown';
+  }
+
+  function publicIssueCode(value) {
+    var codes = {
+      MISSING_SCORM_API: 'LMS_API_MISSING',
+      INITIALIZATION_FAILED: 'LMS_INITIALIZATION_FAILED',
+      COMPLETION_WRITE_FAILED: 'COMPLETION_WRITE_FAILED',
+      COMMIT_FAILED: 'LMS_COMMIT_FAILED',
+      COMPLETION_NOT_COMMITTED: 'COMPLETION_READBACK_UNCONFIRMED',
+      FORCED_IDLE_EXIT: 'SESSION_ENDED_FOR_INACTIVITY',
+      MAXIMUM_TIME_REACHED: 'MAXIMUM_TIME_REACHED',
+      JAVASCRIPT_ERROR: 'COURSE_RUNTIME_ERROR',
+      MEDIA_ERROR: 'MEDIA_PLAYBACK_ERROR',
+      DEGRADED_SHIM: 'OBSERVABILITY_UNAVAILABLE',
+      TELEMETRY_STORAGE_FAILED: 'OBSERVABILITY_DELIVERY_FAILED',
+      TIMEGATE_PERSISTENCE_FAILED: 'TIMEGATE_STATE_SAVE_FAILED',
+      TIMEGATE_CONFIGURATION_FAILED: 'CONFIGURATION_INVALID',
+      LMS_FINALIZATION_FAILED: 'LMS_FINALIZATION_FAILED',
+      LMS_TERMINATION_FAILED: 'LMS_TERMINATION_FAILED',
+      LMS_OPERATION_FAILED: 'LMS_OPERATION_FAILED'
+    };
+    return codes[value] || null;
+  }
+
+  function publicSupportIssues() {
+    var candidates = [];
+    var severityRank = { error: 2, warning: 1, info: 0 };
+    for (var key in issueMap) {
+      if (!Object.prototype.hasOwnProperty.call(issueMap, key)) continue;
+      var issue = issueMap[key];
+      var code = publicIssueCode(issue.code);
+      if (!code) continue;
+      candidates.push({
+        code: code,
+        severity: normalizedSeverity(issue.severity, 'warning'),
+        active: issue.active === true,
+        firstSeenAt: publicTimestamp(issue.firstSeenAt),
+        lastSeenAt: publicTimestamp(issue.lastSeenAt),
+        occurrenceCount: Math.min(
+          1000000,
+          Math.max(0, Math.floor(finiteNumber(issue.occurrenceCount) || 0))
+        )
+      });
+    }
+    candidates.sort(function (left, right) {
+      if (left.active !== right.active) return left.active ? -1 : 1;
+      var severityDifference =
+        (severityRank[right.severity] || 0) -
+        (severityRank[left.severity] || 0);
+      if (severityDifference) return severityDifference;
+      var leftSeen = Date.parse(left.lastSeenAt) || 0;
+      var rightSeen = Date.parse(right.lastSeenAt) || 0;
+      if (leftSeen !== rightSeen) return rightSeen - leftSeen;
+      return left.code < right.code ? -1 : left.code > right.code ? 1 : 0;
+    });
+    return candidates.slice(0, MAX_PUBLIC_SUPPORT_ISSUES);
+  }
+
+  function publicScormEvent(event) {
+    var data = event.data || {};
+    var method = data.method;
+    if (method === 'Initialize') {
+      return { code: 'LMS_INITIALIZE', operation: 'scorm_initialize' };
+    }
+    if (method === 'Commit') {
+      return { code: 'LMS_COMMIT', operation: 'scorm_commit' };
+    }
+    if (method === 'Finish') {
+      return { code: 'LMS_TERMINATE', operation: 'scorm_terminate' };
+    }
+    if (method === 'SetValue') {
+      if (
+        data.completionStatus &&
+        recognizedCanonicalCompletionStatus(
+          data.element,
+          data.completionStatus
+        )
+      ) {
+        return {
+          code: 'COURSE_COMPLETION_WRITE',
+          operation: 'course_completion'
+        };
+      }
+      return { code: 'LMS_WRITE', operation: 'scorm_write' };
+    }
+    if (method === 'GetValue') {
+      if (
+        data.element === 'cmi.core.lesson_status' ||
+        data.element === 'cmi.completion_status'
+      ) {
+        return {
+          code: 'LMS_COMPLETION_READBACK',
+          operation: 'scorm_read'
+        };
+      }
+      return { code: 'LMS_READ', operation: 'scorm_read' };
+    }
+    return { code: 'LMS_OPERATION', operation: 'scorm_operation' };
+  }
+
+  function publicRiseEvent(event) {
+    var method = event.data && event.data.method;
+    var completionMethods = {
+      finish: true,
+      finishQuiz: true,
+      finishStoryline: true
+    };
+    var lifecycleMethods = {
+      exit: true,
+      suspend: true,
+      timeout: true,
+      unload: true
+    };
+    if (completionMethods[method]) {
+      return {
+        code: method === 'finish' ?
+          'COURSE_COMPLETION_REQUESTED' : 'COURSE_COMPLETION_MILESTONE',
+        operation: 'course_completion'
+      };
+    }
+    if (method === 'setCourseProgress' || method === 'setLessonProgress') {
+      return { code: 'COURSE_PROGRESS', operation: 'course_progress' };
+    }
+    if (lifecycleMethods[method]) {
+      return { code: 'COURSE_LIFECYCLE', operation: 'course_lifecycle' };
+    }
+    return { code: 'COURSE_OPERATION', operation: 'course_runtime' };
+  }
+
+  function publicTimegateEvent(event) {
+    var type = event.data && event.data.eventType;
+    var events = {
+      tracking_started: ['TIME_TRACKING_STARTED', 'timegate_tracking'],
+      idle_entered: ['TIME_TRACKING_PAUSED', 'timegate_tracking'],
+      idle_exited: ['TIME_TRACKING_RESUMED', 'timegate_tracking'],
+      completion_gated: ['COMPLETION_HELD_FOR_MINIMUM', 'course_completion'],
+      completion_reset: ['COURSE_COMPLETION_RESET', 'course_completion'],
+      minimum_time_met: ['MINIMUM_TIME_MET', 'timegate_tracking'],
+      completion_replayed: ['COMPLETION_REPLAYED', 'course_completion'],
+      persistence_failed: ['TIMEGATE_STATE_SAVE_FAILED', 'timegate_persistence'],
+      persistence_recovered: ['TIMEGATE_STATE_SAVE_RECOVERED', 'timegate_persistence'],
+      configuration_failed: ['CONFIGURATION_INVALID', 'timegate_configuration'],
+      lms_operation_failed: ['LMS_OPERATION_FAILED', 'scorm_operation'],
+      termination_deferred: ['COMPLETION_TERMINATION_DEFERRED', 'course_completion'],
+      termination_completed: ['LMS_TERMINATION', 'scorm_terminate'],
+      forced_exit: ['SESSION_ENDED_FOR_INACTIVITY', 'timegate_tracking'],
+      maximum_time_reached: ['MAXIMUM_TIME_REACHED', 'timegate_tracking'],
+      metrics: ['TIME_TRACKING_SNAPSHOT', 'timegate_tracking']
+    };
+    return events[type] ? {
+      code: events[type][0],
+      operation: events[type][1]
+    } : null;
+  }
+
+  function classifyPublicEvent(event) {
+    if (event.type === 'scorm_call') return publicScormEvent(event);
+    if (event.type === 'rise_call') return publicRiseEvent(event);
+    if (event.type === 'timegate_event') return publicTimegateEvent(event);
+    var events = {
+      telemetry_started: ['OBSERVABILITY_STARTED', 'telemetry'],
+      snapshot_queued: ['OBSERVABILITY_SNAPSHOT_QUEUED', 'telemetry'],
+      transport_failed: ['OBSERVABILITY_DELIVERY_FAILED', 'transport'],
+      storage_failed: ['OBSERVABILITY_STORAGE_FAILED', 'storage'],
+      instrumentation_error: ['OBSERVABILITY_DEGRADED', 'instrumentation'],
+      javascript_error: ['COURSE_RUNTIME_ERROR', 'course_runtime'],
+      unhandled_rejection: ['COURSE_RUNTIME_ERROR', 'course_runtime'],
+      resource_error: ['COURSE_RESOURCE_ERROR', 'course_runtime'],
+      route_change: ['COURSE_NAVIGATION', 'course_navigation'],
+      media_event: ['COURSE_MEDIA_EVENT', 'course_media']
+    };
+    return events[event.type] ? {
+      code: events[event.type][0],
+      operation: events[event.type][1]
+    } : null;
+  }
+
+  function publicEventResult(event, code) {
+    var data = event.data || {};
+    if (typeof data.success === 'boolean') {
+      return data.success ? 'success' : 'failure';
+    }
+    if (typeof data.resultBoolean === 'boolean') {
+      return data.resultBoolean ? 'success' : 'failure';
+    }
+    var result = data.result;
+    if (result === 'true') return 'success';
+    if (result === 'false' || result === 'threw') return 'failure';
+    if (result === 'queued') return 'queued';
+    if (data.status === 'pending') return 'pending';
+    if (data.status === 'failed') return 'failure';
+    if (data.status === 'initialized') return 'success';
+    var successfulMilestones = {
+      TIME_TRACKING_STARTED: true,
+      TIME_TRACKING_RESUMED: true,
+      MINIMUM_TIME_MET: true,
+      TIMEGATE_STATE_SAVE_RECOVERED: true,
+      LMS_TERMINATION: true,
+      OBSERVABILITY_STARTED: true
+    };
+    var failedMilestones = {
+      TIMEGATE_STATE_SAVE_FAILED: true,
+      CONFIGURATION_INVALID: true,
+      LMS_OPERATION_FAILED: true,
+      SESSION_ENDED_FOR_INACTIVITY: true,
+      MAXIMUM_TIME_REACHED: true,
+      OBSERVABILITY_DELIVERY_FAILED: true,
+      OBSERVABILITY_STORAGE_FAILED: true,
+      OBSERVABILITY_DEGRADED: true,
+      COURSE_RUNTIME_ERROR: true,
+      COURSE_RESOURCE_ERROR: true
+    };
+    if (successfulMilestones[code]) return 'success';
+    if (failedMilestones[code]) return 'failure';
+    if (code === 'COMPLETION_HELD_FOR_MINIMUM') return 'queued';
+    return event.severity === 'error' ? 'failure' : 'observed';
+  }
+
+  function publicSupportEvent(entry) {
+    var event = entry && entry.event;
+    if (!event) return null;
+    var classification = classifyPublicEvent(event);
+    if (!classification) return null;
+    var output = {
+      sequence: Math.min(
+        MAX_SAFE_SEQUENCE - 1,
+        Math.max(0, Math.floor(finiteNumber(event.sequence) || 0))
+      ),
+      occurredAt: publicTimestamp(event.occurredAt),
+      code: classification.code,
+      result: publicEventResult(event, classification.code),
+      operation: classification.operation
+    };
+    var errorCode = event.data && safeScormErrorCode(event.data.errorCode);
+    if (errorCode && errorCode !== 'unknown') output.errorCode = errorCode;
+    return output;
+  }
+
+  function publicSupportDiagnosticTail() {
+    pruneEvents(Date.now());
+    var candidates = [];
+    var severityRank = { error: 3, warning: 2, info: 0 };
+    var supportMilestones = {
+      LMS_INITIALIZE: true,
+      COURSE_COMPLETION_REQUESTED: true,
+      COURSE_COMPLETION_WRITE: true,
+      LMS_COMPLETION_READBACK: true,
+      LMS_COMMIT: true,
+      COMPLETION_HELD_FOR_MINIMUM: true,
+      MINIMUM_TIME_MET: true,
+      COMPLETION_REPLAYED: true,
+      COMPLETION_TERMINATION_DEFERRED: true,
+      LMS_TERMINATION: true,
+      SESSION_ENDED_FOR_INACTIVITY: true,
+      MAXIMUM_TIME_REACHED: true
+    };
+    for (var i = 0; i < eventBuffer.length; i++) {
+      var output = publicSupportEvent(eventBuffer[i]);
+      if (!output) continue;
+      candidates.push({
+        output: output,
+        sequence: output.sequence,
+        priority:
+          (severityRank[eventBuffer[i].event.severity] || 0) +
+          (eventBuffer[i].event.milestone ? 1 : 0) +
+          (supportMilestones[output.code] ? 2 : 0)
+      });
+    }
+    candidates.sort(function (left, right) {
+      if (left.priority !== right.priority) return right.priority - left.priority;
+      return right.sequence - left.sequence;
+    });
+    candidates = candidates.slice(0, MAX_PUBLIC_SUPPORT_EVENTS);
+    candidates.sort(function (left, right) {
+      return left.sequence - right.sequence;
+    });
+    var output = [];
+    for (var j = 0; j < candidates.length; j++) {
+      output.push(candidates[j].output);
+    }
+    return output;
+  }
+
+  function normalizedDeliveryState() {
+    if (disabled) return 'disabled';
+    var allowed = {
+      not_attempted: true,
+      pending: true,
+      succeeded: true,
+      failed: true,
+      unconfirmed: true,
+      unavailable: true
+    };
+    return allowed[telemetryDeliveryState] ?
+      telemetryDeliveryState : 'unconfirmed';
+  }
+
+  function publicSupportSnapshot() {
+    /*
+     * Keep this projection independent from buildSnapshot(). The transport
+     * snapshot contains credentials and raw learner identity; this surface is
+     * learner-copyable and therefore copies only the fixed allowlist below.
+     */
+    var durations = currentDurations();
+    return {
+      schemaVersion: PROTOCOL_VERSION,
+      session: {
+        id: boundedString(session.id, 80),
+        revision: Math.min(
+          MAX_SAFE_SEQUENCE - 1,
+          Math.max(0, Math.floor(finiteNumber(session.revision) || 0))
+        ),
+        lifecycle: publicLifecycle(session.lifecycle)
+      },
+      delivery: {
+        enabled: !disabled,
+        state: normalizedDeliveryState()
+      },
+      instrumentation: {
+        version: boundedString(instrumentationVersion, 40),
+        timegateVersion: boundedString(timegateVersion, 40),
+        scormVersion: courseDescriptor.scormVersion
+      },
+      course: {
+        title: boundedString(courseDescriptor.title, 512),
+        paycomCourseId: boundedString(courseDescriptor.paycomCourseId, 128),
+        riseCourseId: boundedString(courseDescriptor.riseCourseId, 256),
+        manifestIdentifier: boundedString(
+          courseDescriptor.manifestIdentifier,
+          256
+        ),
+        packageVersion: boundedString(courseDescriptor.packageVersion, 128),
+        runtimePackageVersion: boundedString(
+          courseDescriptor.runtimePackageVersion,
+          128
+        ),
+        structureHash: boundedString(courseDescriptor.structureHash, 128)
+      },
+      state: {
+        initialized: !!runtimeState.initialized,
+        lessonStatus: runtimeState.lessonStatus === null ?
+          null : normalizedScormStatus(runtimeState.lessonStatus),
+        progressPercent: runtimeState.progressPercent === null ?
+          null : clampedNumber(runtimeState.progressPercent, 0, 100),
+        activeSeconds: durations.activeSeconds,
+        idleSeconds: durations.idleSeconds,
+        lastCommitResult: runtimeState.lastCommitResult === null ?
+          null : !!runtimeState.lastCommitResult,
+        finishResult: runtimeState.finishResult === null ?
+          null : !!runtimeState.finishResult,
+        lastErrorCode: runtimeState.lastErrorCode === null ?
+          null : safeScormErrorCode(runtimeState.lastErrorCode),
+        completionQueued: !!completionQueuedByTimegate,
+        completionWritten: !!completionWritten,
+        completionCommitted: !!completionCommitted
+      },
+      issues: publicSupportIssues(),
+      diagnosticTail: publicSupportDiagnosticTail()
+    };
+  }
+
   function buildSnapshot(lifecycle) {
     var timestamp = Date.now();
     var observedAt = new Date(timestamp).toISOString();
@@ -1282,6 +1660,20 @@
     }
   }
 
+  function markTelemetryDelivery(state, revision) {
+    var normalizedRevision = finiteNumber(revision);
+    if (
+      normalizedRevision !== null &&
+      normalizedRevision < telemetryDeliveryRevision
+    ) {
+      return;
+    }
+    telemetryDeliveryState = state;
+    if (normalizedRevision !== null) {
+      telemetryDeliveryRevision = normalizedRevision;
+    }
+  }
+
   function startQueuedTransport(delivery) {
     transportInFlight = delivery;
     var serialized = delivery.serialized;
@@ -1298,6 +1690,7 @@
       body: serialized,
       keepalive: utf8Length(serialized) < 60 * 1024
     };
+    markTelemetryDelivery('pending', revision);
     var request;
     try {
       request = window.fetch(config.endpoint, options).then(function (response) {
@@ -1307,8 +1700,10 @@
           throw httpError;
         }
         clearPending(snapshotId, revision);
+        markTelemetryDelivery('succeeded', revision);
       }).catch(function (error) {
         if (error && error.httpResponse) {
+          markTelemetryDelivery('failed', revision);
           observe('transport_http_error', function () {
             recordEvent('transport_failed', 'transport', 'warning', {
               reason: 'http_error'
@@ -1316,6 +1711,7 @@
           });
           return;
         }
+        markTelemetryDelivery('unconfirmed', revision);
         var jitter = 0;
         try {
           jitter = Math.floor(
@@ -1354,7 +1750,9 @@
           };
           return window.fetch(config.endpoint, opaqueOptions).then(function () {
             clearPending(snapshotId, revision);
+            markTelemetryDelivery('unconfirmed', revision);
           }, function () {
+            markTelemetryDelivery('failed', revision);
             observe('transport_network_error', function () {
               recordEvent('transport_failed', 'transport', 'warning', {
                 reason: 'network_error'
@@ -1364,6 +1762,7 @@
         });
       });
     } catch (error) {
+      markTelemetryDelivery('failed', revision);
       request = window.Promise.resolve();
     }
     window.Promise.resolve(request).then(finishQueuedTransport, finishQueuedTransport);
@@ -1379,6 +1778,7 @@
 
   function transportWithFetch(serialized, snapshotId, revision) {
     if (typeof window.fetch !== 'function') {
+      markTelemetryDelivery('unavailable', revision);
       observe('transport_unavailable', function () {
         recordEvent('transport_failed', 'transport', 'warning', {
           reason: 'fetch_unavailable'
@@ -1413,6 +1813,7 @@
       ) {
         var body = new window.Blob([serialized], { type: 'text/plain;charset=UTF-8' });
         if (window.navigator.sendBeacon(config.endpoint, body)) {
+          markTelemetryDelivery('unconfirmed', revision);
           /*
            * A true result means "queued", not delivered. Keep the cumulative
            * snapshot in sessionStorage until a later confirmed CORS response.
@@ -1454,6 +1855,7 @@
       registerInternalFailure(new Error('Snapshot exceeds delivery limit'), 'snapshot_size');
       return;
     }
+    markTelemetryDelivery('pending', snapshot.session.revision);
     storePending(serialized);
     recordEvent('snapshot_queued', 'transport', 'info', {
       reason: boundedString(reason, 80)
@@ -3082,7 +3484,8 @@
           (transportInFlight ? transportInFlight.bytes : 0) +
           (latestQueuedTransport ? latestQueuedTransport.bytes : 0)
       };
-    }
+    },
+    publicSupportSnapshot: publicSupportSnapshot
   };
 
   scheduleSnapshot('launch', 'active', false, false);

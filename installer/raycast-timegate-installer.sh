@@ -124,12 +124,31 @@ APPLESCRIPT
   done
 }
 
+ask_storage_mode() {
+  local choice
+  choice="$(osascript <<'APPLESCRIPT'
+try
+  set response to display dialog "Where should Timegate save its timer and pending state?" & return & return & "Local storage only: leaves course suspend data to Rise. Resume requires the same browser and device with saved browser data." & return & return & "LMS + browser: also saves Timegate state in the LMS shared suspend-data field." & return & return & "Course completion is still reported to the LMS in either mode." with title "Timegate Installer" buttons {"Cancel", "LMS + browser", "Local storage only"} default button "Local storage only"
+  return button returned of response
+on error number -128
+  return "Cancel"
+end try
+APPLESCRIPT
+)"
+  case "$choice" in
+    "Local storage only") printf 'localStorage' ;;
+    "LMS + browser") printf 'dual' ;;
+    *) return 1 ;;
+  esac
+}
+
 confirm_build() {
-  osascript - "$1" "$2" "$3" <<'APPLESCRIPT'
+  osascript - "$1" "$2" "$3" "$4" <<'APPLESCRIPT'
 on run argv
   set theMinimum to item 1 of argv
   set theMaximum to item 2 of argv
   set theOutput to item 3 of argv
+  set theStorageMode to item 4 of argv
   set msg to "Ready to create the Timegate package."
   set msg to msg & return & return & "Minimum required time: " & theMinimum & " minutes"
   if theMaximum is "null" then
@@ -137,6 +156,7 @@ on run argv
   else
     set msg to msg & return & "Maximum active time: " & theMaximum & " minutes"
   end if
+  set msg to msg & return & "Timegate persistence: " & theStorageMode
   set msg to msg & return & return & "Created file:" & return & theOutput
   set msg to msg & return & return & "No telemetry will be installed."
   set msg to msg & return & "The original SCORM ZIP will not be changed."
@@ -154,6 +174,11 @@ write_config() {
   local config_path="$1"
   local minimum="$2"
   local maximum="$3"
+  local storage_mode="${4:-dual}"
+  case "$storage_mode" in
+    localStorage|dual|suspend_data) ;;
+    *) show_error "Invalid storage mode: $storage_mode"; return 1 ;;
+  esac
   cat > "$config_path" <<EOF
 {
   "minRequiredMinutes": $minimum,
@@ -169,10 +194,15 @@ write_config() {
   "idleTimeoutSeconds": 120,
   "backgroundGraceSeconds": 30,
   "launchModalEnabled": true,
+  "audioCuesEnabled": true,
   "hideWhenComplete": false,
   "position": "bottom-right",
-  "storageMode": "dual",
-  "debug": false
+  "storageMode": "$storage_mode",
+  "debug": false,
+  "seatTimeReportingEnabled": false,
+  "seatTimeRelayUrl": "",
+  "seatTimeRelayKey": "",
+  "courseId": ""
 }
 EOF
 }
@@ -191,6 +221,7 @@ if [ "$NONINTERACTIVE" = true ]; then
   INPUT_ZIP="$TIMEGATE_INPUT_ZIP"
   MINUTES="${TIMEGATE_MINUTES:-}"
   MAX_ALLOWED_MINUTES="${TIMEGATE_MAX_MINUTES:-null}"
+  STORAGE_MODE="${TIMEGATE_STORAGE_MODE:-dual}"
   if [ -z "$MINUTES" ]; then
     show_error "TIMEGATE_MINUTES is required with TIMEGATE_INPUT_ZIP."
     exit 2
@@ -202,6 +233,7 @@ else
   fi
   MINUTES="$(ask_minutes)" || exit 0
   MAX_ALLOWED_MINUTES="$(ask_max_minutes "$MINUTES")" || exit 0
+  STORAGE_MODE="$(ask_storage_mode)" || exit 0
 fi
 
 if [ ! -f "$INPUT_ZIP" ]; then
@@ -251,13 +283,14 @@ mkdir -p "$SCORM_ROOT/timegate"
 write_config \
   "$SCORM_ROOT/timegate/timegate.config.json" \
   "$MINUTES" \
-  "$MAX_ALLOWED_MINUTES"
+  "$MAX_ALLOWED_MINUTES" \
+  "$STORAGE_MODE"
 
 INPUT_DIR="$(dirname "$INPUT_ZIP")"
 OUTPUT_ZIP="$INPUT_DIR/$INPUT_STEM-timegate.zip"
 
 if [ "$NONINTERACTIVE" = false ]; then
-  DECISION="$(confirm_build "$MINUTES" "$MAX_ALLOWED_MINUTES" "$OUTPUT_ZIP")"
+  DECISION="$(confirm_build "$MINUTES" "$MAX_ALLOWED_MINUTES" "$OUTPUT_ZIP" "$STORAGE_MODE")"
   if [ "$DECISION" != "Create Package" ]; then
     exit 0
   fi

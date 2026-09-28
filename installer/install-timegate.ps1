@@ -72,6 +72,7 @@ $relJs  = $launchDirUri.MakeRelativeUri($jsUri).ToString()  -replace '\\','/'
 $relCss = $launchDirUri.MakeRelativeUri($cssUri).ToString() -replace '\\','/'
 
 $html = Get-Content $launchPath -Raw
+$originalHtml = $html
 $lmsOpeningPattern = "<script\b(?=[^>]*\bsrc\s*=\s*[""'][^""']*lms-interface\.js[""'])[^>]*>"
 $lmsOpeningTags = @([regex]::Matches(
   $html,
@@ -114,6 +115,11 @@ try {
   exit 1
 }
 $courseKeyProperty = Get-TimegateProperty $effectiveConfigObject 'courseKey'
+$storageModeProperty = Get-TimegateProperty $effectiveConfigObject 'storageMode'
+$strictLocalStorage = (
+  $null -ne $storageModeProperty -and
+  [string]$storageModeProperty.Value -ceq 'localStorage'
+)
 $generatedCourseKey = $null -eq $courseKeyProperty -or $null -eq $courseKeyProperty.Value
 if ($generatedCourseKey) {
   if ($null -eq $courseKeyProperty) {
@@ -159,16 +165,64 @@ try {
 }
 
 if ($referenceState -eq 'absent') {
-  $inject = "`n  <link rel=`"stylesheet`" href=`"$relCss`" data-timegate=`"true`">`n  <script src=`"$relJs`" data-timegate=`"true`"></script>"
+  $storageModeAttribute = if ($strictLocalStorage) {
+    ' data-timegate-storage-mode="localStorage"'
+  } else {
+    ''
+  }
+  $inject = "`n  <link rel=`"stylesheet`" href=`"$relCss`" data-timegate=`"true`">`n  <script src=`"$relJs`" data-timegate=`"true`"$storageModeAttribute></script>"
   $insertAt = $lmsScripts[0].Index + $lmsScripts[0].Length
   $html = $html.Insert($insertAt, $inject)
-  Set-Content -Path $launchPath -Value $html -Encoding utf8
+} else {
+  $timegateScripts = @(Get-TimegateTags $html 'script')
+  $timegateScript = $timegateScripts[0]
+  $storageModePattern = '\s+data-timegate-storage-mode(?:\s*=\s*(?:"[^"]*"|''[^'']*''|[^\s>]+))?'
+  $updatedTimegateTag = [regex]::Replace(
+    $timegateScript.Value,
+    $storageModePattern,
+    '',
+    [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+  )
+  if ($strictLocalStorage) {
+    $updatedTimegateTag = [regex]::Replace(
+      $updatedTimegateTag,
+      '(?<close>\s*/?>)$',
+      ' data-timegate-storage-mode="localStorage"${close}',
+      [System.Text.RegularExpressions.RegexOptions]::None
+    )
+  }
+  $html = $html.Substring(0, $timegateScript.Index) +
+    $updatedTimegateTag +
+    $html.Substring($timegateScript.Index + $timegateScript.Length)
 }
 try {
   Assert-TimegateSynchronousPlacement $html $relJs $relCss
+  $verifiedTimegateScripts = @(Get-TimegateTags $html 'script')
+  $verifiedTimegateTag = $verifiedTimegateScripts[0].Value
+  $verifiedStorageMarkers = @([regex]::Matches(
+    $verifiedTimegateTag,
+    '\bdata-timegate-storage-mode(?:\s*=\s*(?:"[^"]*"|''[^'']*''|[^\s>]+))?',
+    [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+  ))
+  $verifiedStorageMode = Get-TimegateHtmlAttribute `
+    $verifiedTimegateTag `
+    'data-timegate-storage-mode'
+  if ($strictLocalStorage) {
+    if (
+      $verifiedStorageMarkers.Count -ne 1 -or
+      $verifiedStorageMode -cne 'localStorage'
+    ) {
+      throw 'Local-only Timegate packages require exactly one synchronous storage marker'
+    }
+  } elseif ($verifiedStorageMarkers.Count -ne 0) {
+    throw 'Non-local Timegate packages may not retain a local-only storage marker'
+  }
 } catch {
   Write-Host "Timegate injection is not safe: $($_.Exception.Message)"
   exit 1
+}
+if ($html -cne $originalHtml) {
+  Set-Content -Path $launchPath -Value $html -Encoding utf8
 }
 
 $hrefs = @("$DeployDir/timegate.js", "$DeployDir/timegate.css", "$DeployDir/timegate.config.json")
