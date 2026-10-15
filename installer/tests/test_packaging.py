@@ -12,6 +12,7 @@ import unittest
 import zipfile
 from collections import Counter
 from pathlib import Path
+from unittest import mock
 
 
 INSTALLER_DIR = Path(__file__).resolve().parents[1]
@@ -19,12 +20,106 @@ PROJECT_ROOT = INSTALLER_DIR.parent
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 sys.path.insert(0, str(INSTALLER_DIR))
 
-from course_descriptor import DescriptorError, extract_course_descriptor  # noqa: E402
-from instrument_package import (  # noqa: E402
+from core import package as instrument_package_module  # noqa: E402
+from core.observability import DescriptorError, extract_course_descriptor  # noqa: E402
+from core.package import (  # noqa: E402
     InstrumentationError,
     instrument_package,
 )
-from timegate_config import derive_timegate_course_key  # noqa: E402
+from core.config import (  # noqa: E402
+    derive_timegate_course_key,
+    load_timegate_config,
+)
+
+
+SEAT_TIME_INVALID_CONFIG_CASES = (
+    (
+        "seat reporting boolean string",
+        {"minRequiredMinutes": 1, "seatTimeReportingEnabled": "true"},
+        "seatTimeReportingEnabled must be true or false",
+    ),
+    (
+        "seat relay URL wrong type while disabled",
+        {"minRequiredMinutes": 1, "seatTimeRelayUrl": 42},
+        "seatTimeRelayUrl must be a string",
+    ),
+    (
+        "seat relay key wrong type while disabled",
+        {"minRequiredMinutes": 1, "seatTimeRelayKey": None},
+        "seatTimeRelayKey must be a string",
+    ),
+    (
+        "seat course ID wrong type while disabled",
+        {"minRequiredMinutes": 1, "courseId": 3982},
+        "courseId must be a string",
+    ),
+    (
+        "seat relay URL too long while disabled",
+        {"minRequiredMinutes": 1, "seatTimeRelayUrl": "x" * 2049},
+        "seatTimeRelayUrl must not exceed 2048",
+    ),
+    (
+        "seat relay key too long while disabled",
+        {"minRequiredMinutes": 1, "seatTimeRelayKey": "x" * 513},
+        "seatTimeRelayKey must not exceed 512",
+    ),
+    (
+        "seat course ID too long while disabled",
+        {"minRequiredMinutes": 1, "courseId": "x" * 257},
+        "courseId must not exceed 256",
+    ),
+    (
+        "enabled seat reporting missing URL",
+        {
+            "minRequiredMinutes": 1,
+            "seatTimeReportingEnabled": True,
+            "seatTimeRelayKey": "test-key",
+            "courseId": "clean-course-3982",
+        },
+        "seatTimeRelayUrl is required",
+    ),
+    (
+        "enabled seat reporting missing key",
+        {
+            "minRequiredMinutes": 1,
+            "seatTimeReportingEnabled": True,
+            "seatTimeRelayUrl": "https://relay.example.test/timegate",
+            "courseId": "clean-course-3982",
+        },
+        "seatTimeRelayKey is required",
+    ),
+    (
+        "enabled seat reporting missing course ID",
+        {
+            "minRequiredMinutes": 1,
+            "seatTimeReportingEnabled": True,
+            "seatTimeRelayUrl": "https://relay.example.test/timegate",
+            "seatTimeRelayKey": "test-key",
+        },
+        "courseId is required",
+    ),
+    (
+        "remote HTTP seat relay",
+        {
+            "minRequiredMinutes": 1,
+            "seatTimeReportingEnabled": True,
+            "seatTimeRelayUrl": "http://relay.example.test/timegate",
+            "seatTimeRelayKey": "test-key",
+            "courseId": "clean-course-3982",
+        },
+        "loopback development",
+    ),
+    (
+        "relative seat relay URL while disabled",
+        {"minRequiredMinutes": 1, "seatTimeRelayUrl": "/timegate"},
+        "absolute HTTPS URL",
+    ),
+)
+
+SEAT_TIME_INVALID_POWERSHELL_CASES = tuple(
+    (config, expected_error)
+    for _, config, expected_error in SEAT_TIME_INVALID_CONFIG_CASES
+)
 
 
 def _write_synthetic_package(root: Path) -> None:
@@ -152,6 +247,57 @@ def _write_synthetic_package(root: Path) -> None:
     )
     (root / "scormcontent" / "lib" / "dist" / "bootstrap123.js").write_text(
         "", encoding="utf-8"
+    )
+
+
+def _write_complete_timegate_install(root: Path, storage_mode: str) -> None:
+    _write_synthetic_package(root)
+    timegate_dir = root / "timegate"
+    timegate_dir.mkdir()
+    shutil.copyfile(
+        PROJECT_ROOT / "src" / "timegate.js",
+        timegate_dir / "timegate.js",
+    )
+    shutil.copyfile(
+        PROJECT_ROOT / "src" / "timegate.css",
+        timegate_dir / "timegate.css",
+    )
+    (timegate_dir / "timegate.config.json").write_text(
+        json.dumps(
+            {
+                "minRequiredMinutes": 7,
+                "storageMode": storage_mode,
+            }
+        ),
+        encoding="utf-8",
+    )
+    storage_marker = (
+        ' data-timegate-storage-mode="localStorage"'
+        if storage_mode == "localStorage"
+        else ""
+    )
+    driver_path = root / "scormdriver" / "indexAPI.html"
+    driver_path.write_text(
+        driver_path.read_text().replace(
+            '<script src="lms-interface.js"></script>',
+            '<script src="lms-interface.js"></script>\n'
+            '<link rel="stylesheet" href="../timegate/timegate.css" '
+            'data-timegate="true">\n'
+            '<script src="../timegate/timegate.js" data-timegate="true" '
+            f'data-existing="preserved"{storage_marker}></script>',
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = root / "imsmanifest.xml"
+    manifest_path.write_text(
+        manifest_path.read_text().replace(
+            "</resource>",
+            '<file href="timegate/timegate.js" />\n'
+            '<file href="timegate/timegate.css" />\n'
+            '<file href="timegate/timegate.config.json" />\n'
+            "</resource>",
+        ),
+        encoding="utf-8",
     )
 
 
@@ -334,6 +480,87 @@ class CourseDescriptorTests(unittest.TestCase):
 
 
 class PackageInstrumentationTests(unittest.TestCase):
+    def test_checked_in_config_offers_audio_and_keeps_relay_disabled(self) -> None:
+        config = load_timegate_config(
+            PROJECT_ROOT / "src" / "timegate.config.json"
+        )
+        self.assertIs(config["audioCuesEnabled"], True)
+        self.assertIs(config["seatTimeReportingEnabled"], False)
+        self.assertEqual(config["seatTimeRelayUrl"], "")
+        self.assertEqual(config["seatTimeRelayKey"], "")
+        self.assertEqual(config["courseId"], "")
+
+    def test_loopback_http_seat_time_relay_is_accepted_for_development(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "timegate.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "minRequiredMinutes": 1,
+                        "seatTimeReportingEnabled": True,
+                        "seatTimeRelayUrl": "http://[::1]:8787/timegate",
+                        "seatTimeRelayKey": "development-test-key",
+                        "courseId": "development-course",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = load_timegate_config(config_path)
+            self.assertEqual(
+                config["seatTimeRelayUrl"], "http://[::1]:8787/timegate"
+            )
+
+    def test_enabled_seat_time_config_is_validated_and_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "course"
+            root.mkdir()
+            _write_synthetic_package(root)
+            custom_config = Path(directory) / "timegate.json"
+            custom_config.write_text(
+                json.dumps(
+                    {
+                        "minRequiredMinutes": 7,
+                        "maxAllowedMinutes": 20,
+                        "audioCuesEnabled": True,
+                        "seatTimeReportingEnabled": True,
+                        "seatTimeRelayUrl": (
+                            "https://relay.example.test/timegateRelay"
+                        ),
+                        "seatTimeRelayKey": "test-relay-key-not-a-secret",
+                        "courseId": "clean-course-3982",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            instrument_package(
+                root,
+                PROJECT_ROOT,
+                "https://worker.example.test/ingestScormTelemetry",
+                "rise-pilot",
+                "pilot-token-12345",
+                "paycom-course-123",
+                custom_config,
+            )
+
+            installed = json.loads(
+                (root / "timegate" / "timegate.config.json").read_text()
+            )
+            self.assertIs(installed["audioCuesEnabled"], True)
+            self.assertIs(installed["seatTimeReportingEnabled"], True)
+            self.assertEqual(
+                installed["seatTimeRelayUrl"],
+                "https://relay.example.test/timegateRelay",
+            )
+            self.assertEqual(
+                installed["seatTimeRelayKey"],
+                "test-relay-key-not-a-secret",
+            )
+            self.assertEqual(installed["courseId"], "clean-course-3982")
+            self.assertRegex(
+                installed["courseKey"], r"^tg-pkg-v1-[0-9a-f]{64}$"
+            )
+
     def test_worker_credential_limits_are_enforced_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -569,6 +796,11 @@ class PackageInstrumentationTests(unittest.TestCase):
     ) -> None:
         cases = (
             (
+                "audio cues boolean string",
+                {"minRequiredMinutes": 1, "audioCuesEnabled": "true"},
+                "audioCuesEnabled must be true or false",
+            ),
+            (
                 "numeric string",
                 {"minRequiredMinutes": 1, "idleTimeoutSeconds": "oops"},
                 "idleTimeoutSeconds must be a number",
@@ -603,7 +835,7 @@ class PackageInstrumentationTests(unittest.TestCase):
                 {"enforceCompletion": True},
                 "minRequiredMinutes is required",
             ),
-        )
+        ) + SEAT_TIME_INVALID_CONFIG_CASES
         for label, config, expected_error in cases:
             with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory) / "course"
@@ -629,66 +861,6 @@ class PackageInstrumentationTests(unittest.TestCase):
 
                 self.assertEqual(driver_path.read_bytes(), driver_before)
                 self.assertFalse((root / "timegate").exists())
-
-    def test_powershell_config_validator_rejects_boolean_and_enum_strings(
-        self,
-    ) -> None:
-        powershell = (
-            shutil.which("pwsh")
-            or shutil.which("powershell.exe")
-            or shutil.which("powershell")
-        )
-        if powershell is None:
-            self.skipTest("PowerShell is not installed")
-
-        cases = (
-            (
-                {"minRequiredMinutes": 1, "enforceCompletion": "false"},
-                "enforceCompletion must be true or false",
-            ),
-            (
-                {"minRequiredMinutes": 1, "storageMode": "remote"},
-                "storageMode must be one of",
-            ),
-            (
-                [{"minRequiredMinutes": 1}],
-                "must contain a JSON object",
-            ),
-        )
-        command = (
-            "& { param($supportPath, $configPath, $expected) "
-            ". $supportPath; try { Assert-TimegateConfig $configPath; exit 2 } "
-            "catch { if ($_.Exception.Message -notmatch $expected) { "
-            "Write-Error $_; exit 3 }; exit 0 } }"
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            for index, (config, expected) in enumerate(cases):
-                with self.subTest(expected=expected):
-                    config_path = Path(directory) / f"invalid-{index}.json"
-                    config_path.write_text(
-                        json.dumps(config), encoding="utf-8"
-                    )
-                    result = subprocess.run(
-                        [
-                            powershell,
-                            "-NoProfile",
-                            "-NonInteractive",
-                            "-Command",
-                            command,
-                            str(INSTALLER_DIR / "timegate_config.ps1"),
-                            str(config_path),
-                            expected,
-                        ],
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                    )
-                    self.assertEqual(
-                        result.returncode,
-                        0,
-                        f"stdout:\n{result.stdout}\n"
-                        f"stderr:\n{result.stderr}",
-                    )
 
     def test_instrumentation_contract_and_duplicate_rejection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -803,6 +975,232 @@ class PackageInstrumentationTests(unittest.TestCase):
                 driver_before_replay,
             )
 
+    def test_local_storage_mode_adds_synchronous_bootstrap_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "course"
+            root.mkdir()
+            _write_synthetic_package(root)
+            custom_config = Path(directory) / "timegate-local.json"
+            custom_config.write_text(
+                json.dumps(
+                    {
+                        "minRequiredMinutes": 7,
+                        "storageMode": "localStorage",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            instrument_package(
+                root,
+                PROJECT_ROOT,
+                "https://worker.example.test/ingestScormTelemetry",
+                "rise-pilot",
+                "pilot-token-12345",
+                "paycom-course-123",
+                custom_config,
+            )
+
+            driver = (root / "scormdriver" / "indexAPI.html").read_text()
+            timegate_tag = re.search(
+                r'<script\b(?=[^>]*\bsrc=["\']\.\./timegate/'
+                r'timegate\.js["\'])(?=[^>]*\bdata-timegate=["\']true["\'])'
+                r'(?=[^>]*\bdata-timegate-storage-mode=["\']localStorage["\'])'
+                r"[^>]*>",
+                driver,
+                re.IGNORECASE,
+            )
+            self.assertIsNotNone(timegate_tag)
+            self.assertNotRegex(
+                timegate_tag.group(0),
+                r"\s(?:async|defer)(?=\s|=|/?>)",
+            )
+            self.assertEqual(
+                driver.count('data-timegate-storage-mode="localStorage"'),
+                1,
+            )
+            installed_config = json.loads(
+                (root / "timegate" / "timegate.config.json").read_text()
+            )
+            self.assertEqual(installed_config["storageMode"], "localStorage")
+
+    def test_local_storage_mode_rejects_missing_bootstrap_marker_before_writes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "course"
+            root.mkdir()
+            _write_synthetic_package(root)
+            custom_config = Path(directory) / "timegate-local.json"
+            custom_config.write_text(
+                json.dumps(
+                    {
+                        "minRequiredMinutes": 7,
+                        "storageMode": "localStorage",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            driver_path = root / "scormdriver" / "indexAPI.html"
+            content_path = root / "scormcontent" / "index.html"
+            manifest_path = root / "imsmanifest.xml"
+            originals = {
+                path: path.read_bytes()
+                for path in (driver_path, content_path, manifest_path)
+            }
+            original_inject = instrument_package_module._inject_timegate
+
+            def inject_without_storage_marker(*args: object) -> str:
+                return original_inject(*args).replace(
+                    ' data-timegate-storage-mode="localStorage"',
+                    "",
+                )
+
+            with mock.patch.object(
+                instrument_package_module,
+                "_inject_timegate",
+                side_effect=inject_without_storage_marker,
+            ):
+                with self.assertRaisesRegex(
+                    InstrumentationError,
+                    "Local-only Timegate packages require exactly one "
+                    "synchronous storage marker",
+                ):
+                    instrument_package(
+                        root,
+                        PROJECT_ROOT,
+                        "https://worker.example.test/ingestScormTelemetry",
+                        "rise-pilot",
+                        "pilot-token-12345",
+                        "paycom-course-123",
+                        custom_config,
+                    )
+
+            for path, original in originals.items():
+                self.assertEqual(path.read_bytes(), original)
+            self.assertFalse((root / "timegate").exists())
+
+    def test_non_local_mode_rejects_stale_bootstrap_marker_before_writes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "course"
+            root.mkdir()
+            _write_synthetic_package(root)
+            custom_config = Path(directory) / "timegate-dual.json"
+            custom_config.write_text(
+                json.dumps(
+                    {
+                        "minRequiredMinutes": 7,
+                        "storageMode": "dual",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            driver_path = root / "scormdriver" / "indexAPI.html"
+            content_path = root / "scormcontent" / "index.html"
+            manifest_path = root / "imsmanifest.xml"
+            originals = {
+                path: path.read_bytes()
+                for path in (driver_path, content_path, manifest_path)
+            }
+            original_inject = instrument_package_module._inject_timegate
+
+            def inject_with_stale_storage_marker(*args: object) -> str:
+                return original_inject(*args).replace(
+                    ' data-timegate="true"></script>',
+                    ' data-timegate="true" '
+                    'data-timegate-storage-mode="localStorage"></script>',
+                    1,
+                )
+
+            with mock.patch.object(
+                instrument_package_module,
+                "_inject_timegate",
+                side_effect=inject_with_stale_storage_marker,
+            ):
+                with self.assertRaisesRegex(
+                    InstrumentationError,
+                    "Non-local Timegate packages may not retain a local-only "
+                    "storage marker",
+                ):
+                    instrument_package(
+                        root,
+                        PROJECT_ROOT,
+                        "https://worker.example.test/ingestScormTelemetry",
+                        "rise-pilot",
+                        "pilot-token-12345",
+                        "paycom-course-123",
+                        custom_config,
+                    )
+
+            for path, original in originals.items():
+                self.assertEqual(path.read_bytes(), original)
+            self.assertFalse((root / "timegate").exists())
+
+    def test_complete_timegate_install_reconciles_storage_mode_marker(
+        self,
+    ) -> None:
+        transitions = (
+            ("dual", "localStorage", 1),
+            ("localStorage", "dual", 0),
+        )
+        for initial_mode, requested_mode, expected_marker_count in transitions:
+            with self.subTest(
+                initial_mode=initial_mode,
+                requested_mode=requested_mode,
+            ), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "course"
+                _write_complete_timegate_install(root, initial_mode)
+                custom_config = Path(directory) / "timegate-requested.json"
+                custom_config.write_text(
+                    json.dumps(
+                        {
+                            "minRequiredMinutes": 7,
+                            "storageMode": requested_mode,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                instrument_package(
+                    root,
+                    PROJECT_ROOT,
+                    "https://worker.example.test/ingestScormTelemetry",
+                    "rise-pilot",
+                    "pilot-token-12345",
+                    "paycom-course-123",
+                    custom_config,
+                )
+
+                driver = (
+                    root / "scormdriver" / "indexAPI.html"
+                ).read_text()
+                self.assertEqual(
+                    driver.count(
+                        'data-timegate-storage-mode="localStorage"'
+                    ),
+                    expected_marker_count,
+                )
+                self.assertEqual(driver.count('data-existing="preserved"'), 1)
+                timegate_tag = re.search(
+                    r'<script\b(?=[^>]*\bsrc=["\']\.\./timegate/'
+                    r'timegate\.js["\'])[^>]*>',
+                    driver,
+                    re.IGNORECASE,
+                )
+                self.assertIsNotNone(timegate_tag)
+                self.assertNotRegex(
+                    timegate_tag.group(0),
+                    r"\s(?:async|defer)(?=\s|=|/?>)",
+                )
+                installed_config = json.loads(
+                    (root / "timegate" / "timegate.config.json").read_text()
+                )
+                self.assertEqual(
+                    installed_config["storageMode"], requested_mode
+                )
+
     def test_generated_course_key_is_stable_specific_and_preserves_explicit_key(
         self,
     ) -> None:
@@ -868,9 +1266,8 @@ class PackageInstrumentationTests(unittest.TestCase):
                 "publisher-selected-key",
             )
 
+    @unittest.skipIf(os.name == "nt", "POSIX shell adapter")
     def test_posix_packager_creates_timegate_zip(self) -> None:
-        if shutil.which("zip") is None:
-            self.skipTest("zip is not installed")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "synthetic-course"
             root.mkdir()
@@ -885,7 +1282,7 @@ class PackageInstrumentationTests(unittest.TestCase):
                 "PAYCOM_COURSE_ID": "paycom-course-123",
             }
             result = subprocess.run(
-                [str(INSTALLER_DIR / "install-timegate.sh"), str(root)],
+                [str(INSTALLER_DIR / "launchers/mac.command"), "build", str(root), "--observability"],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -895,62 +1292,73 @@ class PackageInstrumentationTests(unittest.TestCase):
             output = root.with_name(f"{root.name}-timegate.zip")
             self.assertTrue(output.is_file())
 
+    @unittest.skipIf(os.name == "nt", "Mac shell adapter")
     def test_raycast_packager_creates_timegate_only_zip(self) -> None:
-        powershell = shutil.which("pwsh")
-        if powershell is None:
-            self.skipTest("PowerShell is not installed")
-        if shutil.which("zip") is None or shutil.which("unzip") is None:
-            self.skipTest("zip and unzip are required")
 
-        with tempfile.TemporaryDirectory() as directory:
-            temp_root = Path(directory)
-            package_root = temp_root / "synthetic-course"
-            package_root.mkdir()
-            _write_synthetic_package(package_root)
-            input_zip = temp_root / "synthetic-course.zip"
-            with zipfile.ZipFile(input_zip, "w") as archive:
-                for path in package_root.rglob("*"):
-                    if path.is_file():
-                        archive.write(path, path.relative_to(package_root))
+        for storage_mode in (None, "localStorage", "dual"):
+            with tempfile.TemporaryDirectory() as directory:
+                temp_root = Path(directory)
+                package_root = temp_root / "synthetic-course"
+                package_root.mkdir()
+                _write_synthetic_package(package_root)
+                input_zip = temp_root / "synthetic-course.zip"
+                with zipfile.ZipFile(input_zip, "w") as archive:
+                    for path in package_root.rglob("*"):
+                        if path.is_file():
+                            archive.write(path, path.relative_to(package_root))
 
-            environment = {
-                **os.environ,
-                "TIMEGATE_PROJECT_ROOT": str(PROJECT_ROOT),
-                "TIMEGATE_INPUT_ZIP": str(input_zip),
-                "TIMEGATE_MINUTES": "20",
-                "TIMEGATE_MAX_MINUTES": "75",
-            }
-            result = subprocess.run(
-                [str(INSTALLER_DIR / "raycast-timegate-installer.sh")],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=environment,
-            )
-            self.assertEqual(
-                result.returncode,
-                0,
-                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
-            )
-
-            output = temp_root / "synthetic-course-timegate.zip"
-            self.assertTrue(output.is_file())
-            with zipfile.ZipFile(output) as archive:
-                self.assertIsNone(archive.testzip())
-                entries = archive.namelist()
-                config = json.loads(
-                    archive.read("timegate/timegate.config.json")
+                environment = {
+                    **os.environ,
+                    "TIMEGATE_PROJECT_ROOT": str(PROJECT_ROOT),
+                    "TIMEGATE_INPUT_ZIP": str(input_zip),
+                    "TIMEGATE_MINUTES": "20",
+                    "TIMEGATE_MAX_MINUTES": "75",
+                }
+                environment.pop("TIMEGATE_STORAGE_MODE", None)
+                if storage_mode is not None:
+                    environment["TIMEGATE_STORAGE_MODE"] = storage_mode
+                result = subprocess.run(
+                    [str(INSTALLER_DIR / "launchers/raycast.sh")],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
                 )
-                self.assertEqual(config["minRequiredMinutes"], 20)
-                self.assertEqual(config["maxAllowedMinutes"], 75)
-                self.assertFalse(
-                    any(
-                        entry.startswith("timegate/observability/")
-                        for entry in entries
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+                )
+
+                output = temp_root / "synthetic-course-timegate.zip"
+                self.assertTrue(output.is_file())
+                with zipfile.ZipFile(output) as archive:
+                    self.assertIsNone(archive.testzip())
+                    entries = archive.namelist()
+                    config = json.loads(
+                        archive.read("timegate/timegate.config.json")
                     )
-                )
-                driver = archive.read("scormdriver/indexAPI.html")
-                self.assertNotIn(b"data-sis-observability", driver)
+                    self.assertEqual(config["storageMode"], storage_mode or "dual")
+                    launch = archive.read("scormdriver/indexAPI.html").decode("utf-8-sig")
+                    self.assertEqual(
+                        launch.count('data-timegate-storage-mode="localStorage"'),
+                        1 if storage_mode == "localStorage" else 0,
+                    )
+                    self.assertEqual(config["minRequiredMinutes"], 20)
+                    self.assertEqual(config["maxAllowedMinutes"], 75)
+                    self.assertIs(config["audioCuesEnabled"], True)
+                    self.assertIs(config["seatTimeReportingEnabled"], False)
+                    self.assertEqual(config["seatTimeRelayUrl"], "")
+                    self.assertEqual(config["seatTimeRelayKey"], "")
+                    self.assertEqual(config["courseId"], "")
+                    self.assertFalse(
+                        any(
+                            entry.startswith("timegate/observability/")
+                            for entry in entries
+                        )
+                    )
+                    driver = archive.read("scormdriver/indexAPI.html")
+                    self.assertNotIn(b"data-sis-observability", driver)
 
     def test_powershell_packager_accepts_single_sco_scorm_2004_package(
         self,
@@ -974,8 +1382,8 @@ class PackageInstrumentationTests(unittest.TestCase):
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(root),
                 ],
                 check=False,
@@ -1027,9 +1435,9 @@ class PackageInstrumentationTests(unittest.TestCase):
 
             self.assertIn(
                 '<script src="lms-interface.js"></script>\n'
-                '  <link rel="stylesheet" '
+                '<link rel="stylesheet" '
                 'href="../timegate/timegate.css" data-timegate="true">\n'
-                '  <script src="../timegate/timegate.js" '
+                '<script src="../timegate/timegate.js" '
                 'data-timegate="true"></script>\n'
                 '<script src="course-start.js"></script>',
                 driver,
@@ -1073,8 +1481,8 @@ class PackageInstrumentationTests(unittest.TestCase):
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(stale_root),
                 ],
                 check=False,
@@ -1082,7 +1490,7 @@ class PackageInstrumentationTests(unittest.TestCase):
                 text=True,
             )
             self.assertNotEqual(stale_result.returncode, 0)
-            self.assertIn("stale, incomplete, or duplicate", stale_result.stdout)
+            self.assertIn("stale, incomplete, or duplicate", stale_result.stdout + stale_result.stderr)
             self.assertEqual(stale_driver.read_bytes(), stale_before)
             self.assertFalse((stale_root / "timegate").exists())
             self.assertFalse(
@@ -1107,8 +1515,8 @@ class PackageInstrumentationTests(unittest.TestCase):
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(stale_root),
                 ],
                 check=False,
@@ -1117,8 +1525,8 @@ class PackageInstrumentationTests(unittest.TestCase):
             )
             self.assertNotEqual(deferred_timegate_result.returncode, 0)
             self.assertIn(
-                "Timegate must execute synchronously",
-                deferred_timegate_result.stdout,
+                "partial Timegate installation",
+                deferred_timegate_result.stdout + deferred_timegate_result.stderr,
             )
             self.assertEqual(
                 stale_driver.read_bytes(), deferred_timegate_before
@@ -1143,8 +1551,8 @@ class PackageInstrumentationTests(unittest.TestCase):
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(invalid_root),
                 ],
                 check=False,
@@ -1152,8 +1560,7 @@ class PackageInstrumentationTests(unittest.TestCase):
                 text=True,
             )
             self.assertNotEqual(invalid_result.returncode, 0)
-            self.assertIn("Invalid Timegate configuration", invalid_result.stdout)
-            self.assertIn("idleTimeoutSeconds must be a number", invalid_result.stdout)
+            self.assertIn("idleTimeoutSeconds must be a number", invalid_result.stdout + invalid_result.stderr)
             self.assertEqual(invalid_driver.read_bytes(), invalid_before)
             self.assertFalse((invalid_root / "timegate" / "timegate.js").exists())
             self.assertFalse(
@@ -1178,8 +1585,8 @@ class PackageInstrumentationTests(unittest.TestCase):
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(deferred_root),
                 ],
                 check=False,
@@ -1188,8 +1595,8 @@ class PackageInstrumentationTests(unittest.TestCase):
             )
             self.assertNotEqual(deferred_result.returncode, 0)
             self.assertIn(
-                "lms-interface.js must appear exactly once and execute synchronously",
-                deferred_result.stdout,
+                "lms-interface.js must execute synchronously",
+                deferred_result.stdout + deferred_result.stderr,
             )
             self.assertEqual(deferred_driver.read_bytes(), deferred_before)
             self.assertFalse((deferred_root / "timegate").exists())
@@ -1216,8 +1623,8 @@ class PackageInstrumentationTests(unittest.TestCase):
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(multi_root),
                 ],
                 check=False,
@@ -1227,7 +1634,7 @@ class PackageInstrumentationTests(unittest.TestCase):
             self.assertNotEqual(multi_result.returncode, 0)
             self.assertIn(
                 "Expected exactly one SCO resource; found 2",
-                multi_result.stdout,
+                multi_result.stdout + multi_result.stderr,
             )
             self.assertEqual(multi_driver.read_bytes(), multi_before)
             self.assertFalse((multi_root / "timegate").exists())
@@ -1261,8 +1668,8 @@ class PackageInstrumentationTests(unittest.TestCase):
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(root),
                 ],
                 check=False,
@@ -1297,6 +1704,13 @@ class PackageInstrumentationTests(unittest.TestCase):
             self.assertEqual(
                 installed_config["courseKey"], expected_course_key
             )
+            self.assertIs(installed_config["audioCuesEnabled"], True)
+            self.assertIs(
+                installed_config["seatTimeReportingEnabled"], False
+            )
+            self.assertEqual(installed_config["seatTimeRelayUrl"], "")
+            self.assertEqual(installed_config["seatTimeRelayKey"], "")
+            self.assertEqual(installed_config["courseId"], "")
             self.assertTrue(
                 root.with_name(f"{root.name}-timegate.zip").is_file()
             )
@@ -1309,8 +1723,19 @@ class PackageInstrumentationTests(unittest.TestCase):
             )
             explicit_config.parent.mkdir()
             explicit_config.write_text(
-                '{"minRequiredMinutes":1,'
-                '"courseKey":"publisher-selected-key"}\n',
+                json.dumps(
+                    {
+                        "minRequiredMinutes": 1,
+                        "courseKey": "publisher-selected-key",
+                        "audioCuesEnabled": True,
+                        "seatTimeReportingEnabled": True,
+                        "seatTimeRelayUrl": (
+                            "https://relay.example.test/timegateRelay"
+                        ),
+                        "seatTimeRelayKey": "test-relay-key-not-a-secret",
+                        "courseId": "clean-course-3982",
+                    }
+                ),
                 encoding="utf-8",
             )
             explicit_result = subprocess.run(
@@ -1319,8 +1744,8 @@ class PackageInstrumentationTests(unittest.TestCase):
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(explicit_root),
                 ],
                 check=False,
@@ -1333,10 +1758,250 @@ class PackageInstrumentationTests(unittest.TestCase):
                 f"stdout:\n{explicit_result.stdout}\n"
                 f"stderr:\n{explicit_result.stderr}",
             )
+            explicit_installed = json.loads(explicit_config.read_text())
             self.assertEqual(
-                json.loads(explicit_config.read_text())["courseKey"],
-                "publisher-selected-key",
+                explicit_installed["courseKey"], "publisher-selected-key"
             )
+            self.assertIs(explicit_installed["audioCuesEnabled"], True)
+            self.assertIs(
+                explicit_installed["seatTimeReportingEnabled"], True
+            )
+            self.assertEqual(
+                explicit_installed["seatTimeRelayUrl"],
+                "https://relay.example.test/timegateRelay",
+            )
+            self.assertEqual(
+                explicit_installed["seatTimeRelayKey"],
+                "test-relay-key-not-a-secret",
+            )
+            self.assertEqual(
+                explicit_installed["courseId"], "clean-course-3982"
+            )
+
+    def test_powershell_packager_marks_local_storage_bootstrap(self) -> None:
+        powershell = (
+            shutil.which("pwsh")
+            or shutil.which("powershell.exe")
+            or shutil.which("powershell")
+        )
+        if powershell is None:
+            self.skipTest("PowerShell is not installed")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "powershell-local-course"
+            root.mkdir()
+            _write_synthetic_package(root)
+            config_path = root / "timegate" / "timegate.config.json"
+            config_path.parent.mkdir()
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "minRequiredMinutes": 7,
+                        "storageMode": "localStorage",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-File",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+            )
+
+            driver = (root / "scormdriver" / "indexAPI.html").read_text()
+            timegate_tag = re.search(
+                r'<script\b(?=[^>]*\bsrc=["\']\.\./timegate/'
+                r'timegate\.js["\'])(?=[^>]*\bdata-timegate=["\']true["\'])'
+                r'(?=[^>]*\bdata-timegate-storage-mode=["\']localStorage["\'])'
+                r"[^>]*>",
+                driver,
+                re.IGNORECASE,
+            )
+            self.assertIsNotNone(timegate_tag)
+            self.assertNotRegex(
+                timegate_tag.group(0),
+                r"\s(?:async|defer)(?=\s|=|/?>)",
+            )
+            self.assertEqual(
+                driver.count('data-timegate-storage-mode="localStorage"'),
+                1,
+            )
+            self.assertEqual(
+                json.loads(config_path.read_text())["storageMode"],
+                "localStorage",
+            )
+
+            output = root.with_name(f"{root.name}-timegate.zip")
+            with zipfile.ZipFile(output) as archive:
+                zipped_driver = archive.read(
+                    "scormdriver/indexAPI.html"
+                ).decode("utf-8-sig")
+                zipped_config = json.loads(
+                    archive.read("timegate/timegate.config.json")
+                )
+            self.assertEqual(
+                zipped_driver.count(
+                    'data-timegate-storage-mode="localStorage"'
+                ),
+                1,
+            )
+            self.assertEqual(zipped_config["storageMode"], "localStorage")
+
+    def test_powershell_packager_reconciles_storage_marker_on_mode_change(
+        self,
+    ) -> None:
+        powershell = (
+            shutil.which("pwsh")
+            or shutil.which("powershell.exe")
+            or shutil.which("powershell")
+        )
+        if powershell is None:
+            self.skipTest("PowerShell is not installed")
+
+        transitions = (
+            ("dual", "localStorage", 1),
+            ("localStorage", "dual", 0),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for initial_mode, requested_mode, expected_marker_count in transitions:
+                with self.subTest(
+                    initial_mode=initial_mode,
+                    requested_mode=requested_mode,
+                ):
+                    root = (
+                        Path(directory)
+                        / f"powershell-{initial_mode}-to-{requested_mode}"
+                    )
+                    root.mkdir()
+                    _write_synthetic_package(root)
+                    config_path = root / "timegate" / "timegate.config.json"
+                    config_path.parent.mkdir()
+                    config_path.write_text(
+                        json.dumps(
+                            {
+                                "minRequiredMinutes": 7,
+                                "storageMode": initial_mode,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    command = [
+                        powershell,
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-File",
+                        str(INSTALLER_DIR / "launchers/windows.ps1"),
+                        "-Cli", "build", "--in-place",
+                        str(root),
+                            "--replace",
+                    ]
+                    initial_result = subprocess.run(
+                        command,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(
+                        initial_result.returncode,
+                        0,
+                        f"stdout:\n{initial_result.stdout}\n"
+                        f"stderr:\n{initial_result.stderr}",
+                    )
+
+                    driver_path = root / "scormdriver" / "indexAPI.html"
+                    driver_path.write_text(
+                        driver_path.read_text().replace(
+                            'src="../timegate/timegate.js" '
+                            'data-timegate="true"',
+                            'src="../timegate/timegate.js" '
+                            'data-timegate="true" data-existing="preserved"',
+                            1,
+                        ),
+                        encoding="utf-8",
+                    )
+                    updated_config = json.loads(config_path.read_text())
+                    updated_config["storageMode"] = requested_mode
+                    config_path.write_text(
+                        json.dumps(updated_config),
+                        encoding="utf-8",
+                    )
+
+                    updated_result = subprocess.run(
+                        command,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(
+                        updated_result.returncode,
+                        0,
+                        f"stdout:\n{updated_result.stdout}\n"
+                        f"stderr:\n{updated_result.stderr}",
+                    )
+                    driver = driver_path.read_text(encoding="utf-8-sig")
+                    self.assertEqual(
+                        driver.count(
+                            'data-timegate-storage-mode="localStorage"'
+                        ),
+                        expected_marker_count,
+                    )
+                    self.assertEqual(
+                        driver.count('data-existing="preserved"'),
+                        1,
+                    )
+                    timegate_tag = re.search(
+                        r'<script\b(?=[^>]*\bsrc=["\']\.\./timegate/'
+                        r'timegate\.js["\'])[^>]*>',
+                        driver,
+                        re.IGNORECASE,
+                    )
+                    self.assertIsNotNone(timegate_tag)
+                    self.assertNotRegex(
+                        timegate_tag.group(0),
+                        r"\s(?:async|defer)(?=\s|=|/?>)",
+                    )
+                    self.assertEqual(
+                        json.loads(config_path.read_text())["storageMode"],
+                        requested_mode,
+                    )
+
+                    output = root.with_name(f"{root.name}-timegate.zip")
+                    with zipfile.ZipFile(output) as archive:
+                        zipped_driver = archive.read(
+                            "scormdriver/indexAPI.html"
+                        ).decode("utf-8-sig")
+                        zipped_config = json.loads(
+                            archive.read("timegate/timegate.config.json")
+                        )
+                    self.assertEqual(
+                        zipped_driver.count(
+                            'data-timegate-storage-mode="localStorage"'
+                        ),
+                        expected_marker_count,
+                    )
+                    self.assertEqual(
+                        zipped_driver.count('data-existing="preserved"'),
+                        1,
+                    )
+                    self.assertEqual(
+                        zipped_config["storageMode"],
+                        requested_mode,
+                    )
 
 
 if __name__ == "__main__":

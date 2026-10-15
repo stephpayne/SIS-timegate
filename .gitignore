@@ -12,3 +12,8 @@ Thumbs.db
 node_modules/
 playwright-report/
 test-results/
+
+# Reproducible course build scratch space
+/tmp/
+# Generated packages, learner investigations, and local verification artifacts
+/output/

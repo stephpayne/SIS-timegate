@@ -29,10 +29,10 @@ jobs:
           node --check src/timegate.js
           node --check src/observability/host.js
           node --check src/observability/content-probe.js
-          bash -n installer/install-timegate.sh
-          bash -n installer/Timegate-Installer.command
+          bash -n installer/launchers/raycast.sh
+          bash -n installer/launchers/mac.command
 
-  windows-installer-syntax:
+  windows-installer:
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -44,9 +44,7 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
-            'installer/Timegate-Installer.ps1',
-            'installer/install-timegate.ps1',
-            'installer/timegate_config.ps1'
+            'installer/launchers/windows.ps1'
           )
           foreach ($file in $files) {
             $tokens = $null
@@ -61,7 +59,10 @@ jobs:
               exit 1
             }
           }
-      - name: Exercise SCORM 2004 packaging
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Exercise shared packaging and Windows adapter
         run: >-
           python -B -m unittest discover -s installer/tests
-          -p test_packaging.py -k scorm_2004 -v
+          -v

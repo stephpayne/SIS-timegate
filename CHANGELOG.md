@@ -4,6 +4,89 @@ All notable changes to Timegate are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Report this launch's active time when Rise writes SCORM session time, recover
+  deferred SCORM 1.2 completion after Rise unload, and release stale Timegate
+  wrappers when an LMS retains its API across replaced course documents.
+  These repairs have local regression coverage; target-LMS acceptance is pending.
+
+### Added
+- One Python 3.10+ packaging engine shared by Mac, Windows, and Raycast; thin native
+  interfaces, centralized defaults and validation, verified atomic ZIP output,
+  explicit telemetry profiles, and launchers grouped under `installer/launchers/`.
+- Removed obsolete top-level installer wrappers after migrating tests, documentation,
+  CI, and the installed Raycast shortcut to the maintained entry points.
+- Learner-opt-in Web Audio cues for inactivity nudges and warnings, live minimum-
+  time milestones, confirmed LMS completion, and terminal inactivity/maximum
+  exits, with a persistent accessible mute control and learner-and-course-scoped
+  preference.
+- Audio cue arbitration, primary-tab and visibility fencing, live-only transition
+  guards, and fail-open browser coverage that keeps sound isolated from LMS state.
+- Optional, disabled-by-default seat-time relay settings with matching runtime,
+  Python, and PowerShell validation; generated GUI and Raycast configurations
+  remain disabled until a reviewed per-course opt-in.
+- Verified-learner, primary-tab seat-time reporting with canonical active-time
+  segments, revisioned store-before-send retries, lifecycle checkpoints, and
+  persisted completion confirmation timestamps.
+- Packaging coverage for HTTPS and loopback-development endpoints, required relay
+  identity fields, bounded strings, custom-config preservation, and disabled
+  Timegate-only output.
+- Windows GUI updates preserve an existing validated seat-time configuration
+  without displaying its relay URL, key, or course ID; fresh packages remain off.
+- A learner- and course-scoped, one-time relaunch explanation after inactivity
+  termination, persisted before LMS Finish/Terminate and cleared on acknowledgement.
+- A persistent learner-facing **Course status and support** surface that separates
+  minimum time, authored-course completion, LMS saving/retry, finalization, and
+  confirmed completion; only the confirmed state tells the learner it is safe to
+  close the course.
+- A learner-copyable Support Report v1 with a privacy-safe support code, opaque
+  correlation identifiers, Timegate timing, completion-handshake and persistence
+  outcomes, coarse browser capabilities, sanitized issue codes, and a bounded
+  event timeline.
+- Problem-state banners and locally available support-report actions for LMS save
+  failures, delayed completion, configuration or persistence failures, and
+  inactivity/maximum exits. Every terminal overlay exposes **Copy support report**,
+  including after LMS termination.
+- Explicit-action clipboard copying with an identical preview, a read-only
+  selectable-text fallback when browser clipboard access is unavailable or
+  denied, and a minimal fallback artifact when full report generation fails.
+- Bounded `suspend_data` failure reasons, field lengths, and numeric LMS error
+  codes in learner support reports, without exposing the stored course data.
+
+### Changed
+- Minimum-time success is no longer presented as course completion. Confirmed
+  completion requires the canonical status write, commit, immediate readback of
+  the applicable canonical terminal status, an empty related outcome queue,
+  current-session time and persistence finalization, and any deferred termination.
+- Fresh and ab-initio launches never hydrate a prior attempt and report no resume
+  source. LMS `suspend_data` compaction preserves core timing and the pending
+  completion queue ahead of optional support diagnostics and the support attempt
+  ID.
+- Learner reports summarize optional observability using exactly `enabled`,
+  `deliveryState`, and `revision`; prior-device diagnostics are advertised only
+  after a succeeded delivery.
+- Rise progress saves retain Timegate's LMS checkpoint when the shared
+  `suspend_data` value fits, including during the asynchronous configuration
+  load on resume. When it does not, the original course write takes
+  priority and Timegate keeps the failure visible while preserving its browser
+  backup where available. Explicit course resets pass through unchanged, and
+  Timegate never writes over an empty LMS read unless its success is confirmed.
+- Local-storage-only packages declare their policy synchronously at launch,
+  leave Rise's `suspend_data` untouched, and fail closed when browser storage is
+  unavailable instead of silently reverting to LMS persistence.
+
+### Security
+- Relay documentation now makes the learner-visible shared-key and CORS limits
+  explicit, requires exposed-key rotation, and keeps relay delivery separate from
+  LMS completion evidence.
+- Learner support reports use a bounded allowlist and exclude learner identity,
+  employee data, answers, credentials, URLs, raw LMS/browser storage, and arbitrary
+  diagnostics. Copied SCORM error codes are numeric-only. Reports are never sent
+  automatically, and their checksum is truncation detection rather than proof of
+  authenticity or completion.
+
 ## [1.4.0] - 2026-08-24
 
 ### Changed

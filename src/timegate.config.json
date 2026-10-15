@@ -16,8 +16,15 @@
   "idleTimeoutSeconds": 120,               // pause the timer after this much idle
   "backgroundGraceSeconds": 30,            // keep counting briefly when the tab loses focus
   "launchModalEnabled": true,              // show the "I understand" modal on launch
+  "audioCuesEnabled": true,                // offer optional sound cues; learners start with sound off
   "hideWhenComplete": false,               // hide the timer once the requirement is met
   "position": "bottom-right",              // bottom-right | bottom-left
   "storageMode": "dual",                   // localStorage | suspend_data | dual
-  "debug": false                           // console logging — turn off for production
+  "debug": false,                          // console logging — turn off for production
+
+  // Optional seat-time relay. Disabled packages make no relay requests.
+  "seatTimeReportingEnabled": false,       // explicit per-course opt-in
+  "seatTimeRelayUrl": "",                  // HTTPS relay endpoint (loopback HTTP is development-only)
+  "seatTimeRelayKey": "",                  // learner-visible shared integration key; not a secret
+  "courseId": ""                           // relay Clean Course ID; separate from generated courseKey
 }

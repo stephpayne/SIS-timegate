@@ -16,8 +16,8 @@
   right: auto;
 }
 
-#timegate-root.timegate--hidden {
-  display: none;
+#timegate-root.timegate--hidden .timegate-ring {
+  visibility: hidden;
 }
 
 .timegate-ring {
@@ -36,6 +36,10 @@
   height: 100%;
   overflow: visible;
   width: 100%;
+}
+
+.timegate-ring-svg:focus {
+  outline: none;
 }
 
 .timegate-ring-track {
@@ -62,6 +66,57 @@
 
 .timegate-ring-marker[hidden] {
   display: none;
+}
+
+.timegate-ring[data-carousel-pulse='elapsed'] .timegate-ring-fill {
+  animation:
+    timegate-ring-fill-focus 500ms cubic-bezier(0.2, 0.75, 0.25, 1)
+    180ms both;
+}
+
+.timegate-ring[data-carousel-pulse='minimum'] .timegate-ring-marker {
+  animation:
+    timegate-ring-marker-focus 500ms cubic-bezier(0.2, 0.75, 0.25, 1)
+    180ms both;
+}
+
+.timegate-ring[data-carousel-pulse='maximum'] .timegate-ring-track {
+  animation:
+    timegate-ring-track-focus 500ms cubic-bezier(0.2, 0.75, 0.25, 1)
+    180ms both;
+}
+
+@keyframes timegate-ring-fill-focus {
+  0%, 100% {
+    filter: none;
+    stroke-width: 9;
+  }
+  45% {
+    filter: drop-shadow(0 0 1.5px rgba(0, 106, 170, 0.3));
+    stroke-width: 10.25;
+  }
+}
+
+@keyframes timegate-ring-marker-focus {
+  0%, 100% {
+    filter: none;
+    stroke-width: 3.5;
+  }
+  45% {
+    filter: drop-shadow(0 0 1.5px rgba(197, 135, 0, 0.36));
+    stroke-width: 4.5;
+  }
+}
+
+@keyframes timegate-ring-track-focus {
+  0%, 100% {
+    stroke: rgba(0, 63, 109, 0.14);
+    stroke-width: 9;
+  }
+  45% {
+    stroke: rgba(0, 63, 109, 0.25);
+    stroke-width: 10.25;
+  }
 }
 
 .timegate-ring-center {
@@ -145,6 +200,14 @@
   color: #087544;
 }
 
+.timegate--state-minimum-met .timegate-ring-fill {
+  stroke: #8a6400;
+}
+
+.timegate--state-minimum-met .timegate-ring-value {
+  color: #6d5000;
+}
+
 .timegate--state-paused .timegate-ring-fill {
   stroke: #d97706;
 }
@@ -174,6 +237,283 @@
   }
 }
 
+/* ---- Learner course status and support ---- */
+.timegate-support-button {
+  align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  bottom: -4px;
+  box-shadow: none;
+  box-sizing: border-box;
+  color: #003f6d;
+  cursor: pointer;
+  display: flex;
+  font: 700 15px/1 Georgia, serif;
+  height: 44px;
+  justify-content: center;
+  min-width: 44px;
+  padding: 6px;
+  pointer-events: all;
+  position: absolute;
+  right: -4px;
+  width: 44px;
+}
+
+.timegate-support-button span {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid rgba(0, 63, 109, 0.24);
+  border-radius: 50%;
+  box-shadow: 0 2px 7px rgba(0, 30, 55, 0.2);
+  box-sizing: border-box;
+  display: flex;
+  height: 30px;
+  justify-content: center;
+  transition: background 120ms ease-out, color 120ms ease-out, transform 100ms ease-out;
+  width: 30px;
+}
+
+.timegate-support-button:hover span {
+  background: #eef6fc;
+}
+
+.timegate-support-button:active span {
+  transform: scale(0.94);
+}
+
+.timegate-support-button:focus-visible,
+.timegate-support-banner:focus-visible,
+.timegate-support-dialog button:focus-visible,
+.timegate-support-text:focus-visible {
+  outline: 3px solid #00558f;
+  outline-offset: 2px;
+}
+
+.timegate-support-button[data-support-state='completion_retrying'] span,
+.timegate-support-button[data-support-state='configuration_error'] span,
+.timegate-support-button[data-support-state='lms_unavailable'] span,
+.timegate-support-button[data-support-state='persistence_warning'] span {
+  background: #fff4e5;
+  border-color: #b85d00;
+  color: #8a4300;
+}
+
+.timegate-support-button[data-support-state='completion_confirmed'] span {
+  background: #087544;
+  border-color: #087544;
+  color: #ffffff;
+}
+
+.timegate-support-banner {
+  appearance: none;
+  background: #fff4e5;
+  border: 1px solid #b85d00;
+  border-radius: 8px;
+  bottom: 118px;
+  box-sizing: border-box;
+  box-shadow: 0 4px 14px rgba(0, 30, 55, 0.22);
+  color: #5f3000;
+  cursor: pointer;
+  font: 600 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  max-width: min(310px, calc(100vw - 32px));
+  padding: 10px 12px;
+  pointer-events: all;
+  position: absolute;
+  right: 0;
+  text-align: left;
+  width: max-content;
+}
+
+#timegate-root.timegate--bottom-left .timegate-support-banner {
+  left: 0;
+  right: auto;
+}
+
+.timegate-support-banner[hidden],
+.timegate-support-overlay[hidden],
+.timegate-support-text[hidden],
+.timegate-support-actions button[hidden] {
+  display: none;
+}
+
+.timegate-support-overlay {
+  align-items: center;
+  background: rgba(0, 24, 42, 0.68);
+  display: flex;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  z-index: 2147483647;
+}
+
+.timegate-support-dialog {
+  background: #ffffff;
+  border: 1px solid rgba(0, 63, 109, 0.16);
+  border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(0, 20, 36, 0.42);
+  box-sizing: border-box;
+  color: #172b3a;
+  max-height: calc(100vh - 40px);
+  max-width: 440px;
+  overflow: auto;
+  padding: 24px;
+  position: relative;
+  width: 100%;
+}
+
+.timegate-support-dialog h2 {
+  color: #003f6d;
+  font-size: 20px;
+  line-height: 1.25;
+  margin: 0 44px 12px 0;
+}
+
+.timegate-support-close {
+  align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  color: #334e60;
+  cursor: pointer;
+  display: flex;
+  font: 400 28px/1 sans-serif;
+  height: 44px;
+  justify-content: center;
+  padding: 0;
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  width: 44px;
+}
+
+.timegate-support-status {
+  background: #eef6fc;
+  border-left: 4px solid #006aaa;
+  border-radius: 6px;
+  color: #173a52;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+}
+
+.timegate-support-dialog[data-support-state='completion_retrying'] .timegate-support-status,
+.timegate-support-dialog[data-support-state='configuration_error'] .timegate-support-status,
+.timegate-support-dialog[data-support-state='lms_unavailable'] .timegate-support-status {
+  background: #fff4e5;
+  border-left-color: #b85d00;
+}
+
+.timegate-support-dialog[data-support-state='completion_confirmed'] .timegate-support-status {
+  background: #e9f8f0;
+  border-left-color: #087544;
+}
+
+.timegate-support-timing,
+.timegate-support-guidance {
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0 0 8px;
+}
+
+.timegate-support-timing {
+  color: #334e60;
+  margin-bottom: 4px;
+}
+
+.timegate-support-guidance {
+  margin-top: 12px;
+}
+
+.timegate-support-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.timegate-support-actions button {
+  border-radius: 8px;
+  cursor: pointer;
+  font: 600 14px/1.25 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  min-height: 44px;
+  padding: 10px 16px;
+}
+
+.timegate-support-primary {
+  background: #006aaa;
+  border: 1px solid #006aaa;
+  color: #ffffff;
+}
+
+.timegate-support-primary:hover {
+  background: #00558f;
+}
+
+.timegate-support-secondary {
+  background: #ffffff;
+  border: 1px solid #006aaa;
+  color: #00558f;
+}
+
+.timegate-support-actions button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.timegate-support-text {
+  box-sizing: border-box;
+  display: block;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  margin-top: 16px;
+  max-width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  width: 100%;
+}
+
+.timegate-support-live {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+@media (max-width: 480px) {
+  .timegate-support-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .timegate-support-dialog {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    max-height: calc(100vh - env(safe-area-inset-top));
+    max-width: none;
+    padding: 24px 18px calc(18px + env(safe-area-inset-bottom));
+  }
+
+  .timegate-support-banner {
+    bottom: 102px;
+  }
+
+  .timegate-support-actions,
+  .timegate-support-actions button {
+    width: 100%;
+  }
+}
+
 /* ---- Launch acknowledgment modal ---- */
 .timegate-launch-modal {
   position: fixed;
@@ -190,6 +530,7 @@
 
 .timegate-launch-card {
   background: #ffffff;
+  box-sizing: border-box;
   color: #1a1a1a;
   border-radius: 6px;
   border: 1px solid rgba(0, 0, 0, 0.1);
@@ -197,6 +538,7 @@
   max-width: 520px;
   max-height: calc(100vh - 32px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   width: 100%;
   padding: 28px 28px 24px;
   text-align: center;
@@ -212,7 +554,11 @@
   font-size: 20px;
   font-weight: 700;
   color: #003764;
-  margin-bottom: 14px;
+  margin: 0 0 14px;
+}
+
+.timegate-launch-title:focus {
+  outline: none;
 }
 
 .timegate-launch-body p {
@@ -301,6 +647,47 @@
   transition: background 0.15s ease, transform 0.1s ease-out;
 }
 
+.timegate-audio-choice {
+  align-items: flex-start;
+  background: #f5f8fa;
+  border: 1px solid #d8e2e9;
+  border-radius: 10px;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  margin: 0 0 20px;
+  padding: 13px 14px;
+  text-align: left;
+}
+
+.timegate-audio-choice input {
+  accent-color: #006aaa;
+  flex: 0 0 auto;
+  height: 19px;
+  margin: 2px 0 0;
+  width: 19px;
+}
+
+.timegate-audio-choice input:focus-visible {
+  outline: 3px solid #80c7f5;
+  outline-offset: 2px;
+}
+
+.timegate-audio-choice-copy {
+  color: #34495a;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 2px;
+  line-height: 1.45;
+}
+
+.timegate-audio-choice-copy strong {
+  color: #003764;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
 .timegate-launch-button:active {
   transform: scale(0.97);
 }
@@ -360,6 +747,12 @@
   transition: opacity 180ms ease-out;
 }
 
+@media (max-height: 680px) {
+  #timegate-modal-preview {
+    display: none;
+  }
+}
+
 .timegate-preview-card {
   background: transparent;
   border: 0;
@@ -395,6 +788,27 @@
   .timegate-ring-value,
   .timegate-ring-label {
     transition: none;
+  }
+
+  .timegate-ring[data-carousel-pulse='elapsed'] .timegate-ring-fill,
+  .timegate-ring[data-carousel-pulse='minimum'] .timegate-ring-marker,
+  .timegate-ring[data-carousel-pulse='maximum'] .timegate-ring-track {
+    animation: none;
+  }
+
+  .timegate-ring[data-carousel-pulse='elapsed'] .timegate-ring-fill {
+    filter: drop-shadow(0 0 1px rgba(0, 106, 170, 0.32));
+    stroke-width: 9.75;
+  }
+
+  .timegate-ring[data-carousel-pulse='minimum'] .timegate-ring-marker {
+    filter: drop-shadow(0 0 1px rgba(197, 135, 0, 0.38));
+    stroke-width: 4.25;
+  }
+
+  .timegate-ring[data-carousel-pulse='maximum'] .timegate-ring-track {
+    stroke: rgba(0, 63, 109, 0.22);
+    stroke-width: 9.75;
   }
 }
 
@@ -520,6 +934,29 @@
   line-height: 1.55;
   margin: 0;
   color: #2a2a2a;
+}
+
+.timegate-walkback-support {
+  appearance: none;
+  background: #006aaa;
+  border: 1px solid #006aaa;
+  border-radius: 8px;
+  color: #ffffff;
+  cursor: pointer;
+  font: 600 15px/1.25 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  margin-top: 22px;
+  min-height: 44px;
+  padding: 11px 18px;
+}
+
+.timegate-walkback-support:hover {
+  background: #00558f;
+}
+
+.timegate-walkback-support:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 5px #003f6d;
 }
 
 @media (max-width: 480px) {

@@ -8,10 +8,12 @@ import json
 import math
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 BOOLEAN_FIELDS = frozenset(
     {
+        "audioCuesEnabled",
         "countWhileMediaPlaying",
         "debug",
         "disableVideoSkip",
@@ -20,6 +22,7 @@ BOOLEAN_FIELDS = frozenset(
         "hideWhenComplete",
         "inactivityForceExitEnabled",
         "launchModalEnabled",
+        "seatTimeReportingEnabled",
     }
 )
 
@@ -37,11 +40,18 @@ ENUM_FIELDS = {
     "storageMode": frozenset({"dual", "localStorage", "suspend_data"}),
 }
 
+STRING_MAX_LENGTHS = {
+    "seatTimeRelayUrl": 2048,
+    "seatTimeRelayKey": 512,
+    "courseId": 256,
+}
+
 ALLOWED_FIELDS = frozenset(
     {
         *BOOLEAN_FIELDS,
         *NUMBER_RANGES,
         *ENUM_FIELDS,
+        *STRING_MAX_LENGTHS,
         "courseKey",
         "maxAllowedMinutes",
     }
@@ -212,6 +222,52 @@ def _require_number(
         )
 
 
+def _require_string(config: dict[str, Any], field: str, maximum: int) -> None:
+    if field not in config:
+        return
+    value = config[field]
+    if not isinstance(value, str):
+        raise TimegateConfigError(f"{field} must be a string")
+    if len(value) > maximum:
+        raise TimegateConfigError(
+            f"{field} must not exceed {maximum} characters"
+        )
+
+
+def _validate_seat_time_relay_url(value: str) -> None:
+    if not value:
+        return
+    if any(character.isspace() for character in value):
+        raise TimegateConfigError(
+            "seatTimeRelayUrl must be an absolute HTTPS URL"
+        )
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        _ = parsed.port
+    except ValueError as exc:
+        raise TimegateConfigError(
+            "seatTimeRelayUrl must be an absolute HTTPS URL"
+        ) from exc
+    if not hostname or not parsed.netloc:
+        raise TimegateConfigError(
+            "seatTimeRelayUrl must be an absolute HTTPS URL"
+        )
+    scheme = parsed.scheme.lower()
+    if scheme == "https":
+        return
+    if scheme == "http" and hostname.lower() in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    }:
+        return
+    raise TimegateConfigError(
+        "seatTimeRelayUrl must use HTTPS "
+        "(HTTP is allowed only for loopback development)"
+    )
+
+
 def validate_timegate_config(config: dict[str, Any]) -> dict[str, Any]:
     unknown = sorted(set(config) - ALLOWED_FIELDS)
     if unknown:
@@ -228,6 +284,21 @@ def validate_timegate_config(config: dict[str, Any]) -> dict[str, Any]:
     for field in BOOLEAN_FIELDS:
         if field in config and not isinstance(config[field], bool):
             raise TimegateConfigError(f"{field} must be true or false")
+
+    for field, maximum in STRING_MAX_LENGTHS.items():
+        _require_string(config, field, maximum)
+
+    relay_url = config.get("seatTimeRelayUrl", "")
+    if isinstance(relay_url, str):
+        _validate_seat_time_relay_url(relay_url)
+
+    if config.get("seatTimeReportingEnabled") is True:
+        for field in ("seatTimeRelayUrl", "seatTimeRelayKey", "courseId"):
+            value = config.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise TimegateConfigError(
+                    f"{field} is required when seatTimeReportingEnabled is true"
+                )
 
     for field, allowed in ENUM_FIELDS.items():
         if field in config and config[field] not in allowed:
