@@ -118,6 +118,7 @@
     initialized: false,
     terminated: false
   };
+  var driverLoaded = false;
 
   function booleanResult(succeeded, errorCode) {
     window.intSCORMError = succeeded ? '0' : String(errorCode || 101);
@@ -150,6 +151,7 @@
         );
         if (succeeded) {
           lifecycle.initialized = true;
+          driverLoaded = true;
           try {
             window.sessionStorage.setItem(attemptMarker, 'started');
           } catch (error) {
@@ -213,11 +215,21 @@
     };
   }
 
-  if (driverMode === 'rise') {
+  if (driverMode === 'rise' || driverMode === 'rise-unload') {
+    if (driverMode === 'rise-unload') {
+      window.blnCalledFinish = false;
+      window.IsLoaded = function () { return driverLoaded; };
+      window.Unload = function () {
+        window.blnCalledFinish = true;
+        driverLoaded = false;
+        return window.SCORM_CallLMSFinish('');
+      };
+    }
     window.SetReachedEnd = function () {
       riseCalls.push(['SetReachedEnd']);
       render();
       if (failure.driver) return false;
+      if (driverMode === 'rise-unload' && !driverLoaded) return false;
       return window.SCORM_CallLMSSetValue(
         'cmi.core.lesson_status',
         'completed'

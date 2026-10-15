@@ -794,6 +794,102 @@ async function openRiseDriverHarness(page) {
   );
 }
 
+test('Rise unload before minimum replays completion through the live LMS API', async ({ page }) => {
+  await openLearnerSupportHarness(page,
+    'timegate=delay&min=0.05&strictScorm=1&driver=rise-unload&telemetry=disabled');
+  await page.evaluate(() => {
+    window.localLmsHarness.driverComplete();
+    window.Unload();
+  });
+  expect(await page.evaluate(() => window.IsLoaded())).toBe(false);
+  expect(await page.evaluate(() => window.localLmsHarness.values['cmi.core.lesson_status'])).toBe('incomplete');
+  await page.waitForFunction(() => window.localLmsHarness.lifecycle.terminated);
+  const report = (await buildLearnerSupportReport(page)).parsed.payload;
+  expect(report.summary.completionSafeToClose).toBe(true);
+  expect(await page.evaluate(() => window.localLmsHarness.values['cmi.core.lesson_status'])).toBe('completed');
+  expect(await page.evaluate(() => window.localLmsHarness.calls.filter(c => c[0] === 'LMSFinish').length)).toBe(1);
+});
+
+test('session-time writes use launch active time and preserve rejected LMS results', async ({ page }) => {
+  await openLearnerSupportHarness(page,
+    'timegate=delay&min=30&strictScorm=1&seatIdle=1&telemetry=disabled');
+  await page.waitForTimeout(2500);
+  const result = await page.evaluate(() => {
+    const accepted = window.API.LMSSetValue('cmi.core.session_time', '0001:00:00.00');
+    const saved = window.localLmsHarness.values['cmi.core.session_time'];
+    window.localLmsHarness.failure.setValue = true;
+    const rejected = window.API.LMSSetValue('cmi.core.session_time', '0002:00:00.00');
+    return {accepted, saved, rejected, error: window.API.LMSGetLastError()};
+  });
+  expect(result.accepted).toBe('true');
+  expect(result.saved).toMatch(/^0000:00:0[0-3]\.\d{2}$/);
+  expect(result.rejected).toBe('false');
+  expect(result.error).toBe('351');
+});
+
+test('Rise unload recovery waits for a successful LMS commit before finishing', async ({ page }) => {
+  await openLearnerSupportHarness(page,
+    'timegate=delay&min=0.05&strictScorm=1&driver=rise-unload&telemetry=disabled');
+  await page.evaluate(() => {
+    window.localLmsHarness.driverComplete();
+    window.Unload();
+    window.localLmsHarness.failure.commit = true;
+  });
+  await page.waitForTimeout(4500);
+  const blocked = (await buildLearnerSupportReport(page)).parsed.payload;
+  expect(blocked.completion.pending).toBe(true);
+  expect(blocked.summary.completionSafeToClose).toBe(false);
+  expect(await page.evaluate(() => window.localLmsHarness.lifecycle.terminated)).toBe(false);
+  await page.evaluate(() => { window.localLmsHarness.failure.commit = false; });
+  await page.waitForFunction(() => window.localLmsHarness.lifecycle.terminated);
+  expect((await buildLearnerSupportReport(page)).parsed.payload.summary.completionSafeToClose).toBe(true);
+});
+
+test('SCORM 2004 session time also uses launch active time', async ({ page }) => {
+  await openScorm2004Harness(page);
+  await page.evaluate(() => window.localLmsHarness.initialize());
+  const result = await page.evaluate(() => {
+    const accepted = window.API_1484_11.SetValue('cmi.session_time', 'PT1H0M0S');
+    return {accepted, saved:window.localLmsHarness.values['cmi.session_time']};
+  });
+  expect(result.accepted).toBe('true');
+  expect(result.saved).toMatch(/^PT0H0M[0-2](\.\d+)?S$/);
+});
+
+test('replaced SCO document releases its wrappers on a retained parent LMS API', async ({ page }) => {
+  await page.goto(harnessPath);
+  async function loadCourse(minimum) {
+    await page.evaluate((minRequiredMinutes) => {
+      let iframe = document.getElementById('reused-api-course');
+      if (!iframe) {
+        iframe = document.createElement('iframe');
+        iframe.id = 'reused-api-course';
+        document.body.appendChild(iframe);
+      }
+      const settings = JSON.stringify({
+        courseKey:'reused-parent-api', minRequiredMinutes,
+        maxAllowedMinutes:null, storageMode:'localStorage',
+        launchModalEnabled:false, audioCuesEnabled:false,
+        enforceCompletion:true, inactivityForceExitEnabled:false
+      });
+      iframe.srcdoc = '<html><head><script>window.TIMEGATE_CONFIG=' + settings +
+        '</script><script src="/src/timegate.js"></script></head><body>Course</body></html>';
+    }, minimum);
+    const frame = page.frameLocator('#reused-api-course');
+    await expect(frame.locator('#timegate-root')).toBeVisible();
+    return page.frames().find(f => f !== page.mainFrame() && f.url() === 'about:srcdoc');
+  }
+  const first = await loadCourse(30);
+  await first.evaluate(() => parent.API.LMSInitialize(''));
+  await loadCourse(0);
+  const result = await page.evaluate(() => {
+    window.API.LMSInitialize('');
+    return window.API.LMSSetValue('cmi.core.lesson_status','completed');
+  });
+  expect(result).toBe('true');
+  expect(await page.evaluate(() => window.localLmsHarness.values['cmi.core.lesson_status'])).toBe('completed');
+});
+
 async function openSeatTimeHarness(
   page,
   {

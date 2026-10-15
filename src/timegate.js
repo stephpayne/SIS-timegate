@@ -5,6 +5,7 @@
   var INSTANCE_KEY = 'timegate-v2';
   var LOADED_FLAG = '__timegateV2Loaded';
   var WRAPPED_FLAG = '__timegateV2Wrapped';
+  var API_OWNER_KEY = '__sisTimegateApiOwnerV1';
   var SUSPEND_DATA_KEY = '__timegate_v2';
   var bootstrapStorageMode = '';
 
@@ -5005,6 +5006,29 @@
     };
     if (typeof api[method.setValue] !== 'function') return null;
 
+    // Some LMS shells retain their API object while replacing the SCO iframe.
+    // Remove only our own wrappers from a document that no longer exists;
+    // a wrapper owned by a live sibling or by another observer stays intact.
+    var previousOwner = api[API_OWNER_KEY];
+    var previousDocumentReplaced = false;
+    if (previousOwner) {
+      try {
+        previousDocumentReplaced = previousOwner.window.closed ||
+          previousOwner.window.document !== previousOwner.document;
+      } catch (e) {
+        // Unknown ownership is not permission to replace a live wrapper.
+      }
+      if (previousDocumentReplaced) {
+        var previousNames = Object.keys(previousOwner.wrapped);
+        for (var n = 0; n < previousNames.length; n++) {
+          var previousName = previousNames[n];
+          if (api[previousName] === previousOwner.wrapped[previousName]) {
+            api[previousName] = previousOwner.original[previousName];
+          }
+        }
+      }
+    }
+
     var gate = {
       active: true,
       api: api,
@@ -5138,6 +5162,16 @@
         return result;
       };
     }
+    gate.owner = {window: window, document: document, original: {}, wrapped: {}};
+    var ownedOperations = ['initialize', 'setValue', 'terminate'];
+    for (var o = 0; o < ownedOperations.length; o++) {
+      var operation = ownedOperations[o];
+      if (!gate.original[operation]) continue;
+      var ownedName = method[operation];
+      gate.owner.original[ownedName] = gate.original[operation];
+      gate.owner.wrapped[ownedName] = api[ownedName];
+    }
+    api[API_OWNER_KEY] = gate.owner;
 
     /*
      * A course can report completion and Finish before configuration finishes
@@ -6735,6 +6769,18 @@
         return original(el, value);
       }
 
+      // Rise's periodic commit and unload paths report wall-clock session time.
+      // The LMS must receive this launch's active time regardless of which
+      // reporting path writes last. Keep the LMS's actual result/error intact.
+      if (
+        state && apiInitialized &&
+        el === (apiAdapter.is2004 ? 'cmi.session_time' : 'cmi.core.session_time')
+      ) {
+        return original(el, apiAdapter.is2004 ?
+          formatScorm2004SessionTime(state.sessionSeconds) :
+          formatScorm12SessionTime(state.sessionSeconds));
+      }
+
       if (el === 'cmi.suspend_data') {
         return writeAuthoredSuspendData(el, value, original);
       }
@@ -7114,8 +7160,24 @@
       var call = state.pendingDriverCalls[i];
       if (!call || !call.name || !driverAdapter.originals[call.name]) continue;
       try {
-        var driverResult =
-          driverAdapter.originals[call.name].apply(window, call.args || []);
+        var driverResult;
+        // Rustici marks its own driver unloaded before calling LMSFinish.
+        // Timegate can defer that API termination, leaving a live LMS session
+        // but a driver that rejects SetReachedEnd. Deliver the already queued
+        // SCORM 1.2 completion intent through that live API, then require the
+        // same commit/readback as a normal replay. A new driver's bootstrap is
+        // excluded: it has not called Finish and must become ready first.
+        if (
+          call.name === 'SetReachedEnd' && apiAdapter &&
+          !apiAdapter.is2004 && apiInitialized &&
+          window.blnCalledFinish === true &&
+          typeof window.IsLoaded === 'function' && !window.IsLoaded()
+        ) {
+          driverResult = setScormValue('cmi.core.lesson_status', 'completed');
+        } else {
+          driverResult =
+            driverAdapter.originals[call.name].apply(window, call.args || []);
+        }
         if (!driverCallSucceeded(driverResult)) replaySucceeded = false;
       } catch (e) {
         replaySucceeded = false;
@@ -7590,6 +7652,13 @@
     }
     if (driverAdapter) {
       wrapDriverFunctions();
+    }
+    if (bootstrapGate && bootstrapGate.owner && apiAdapter) {
+      var ownedNames = Object.keys(bootstrapGate.owner.wrapped);
+      for (var w = 0; w < ownedNames.length; w++) {
+        var ownedName = ownedNames[w];
+        bootstrapGate.owner.wrapped[ownedName] = apiAdapter.api[ownedName];
+      }
     }
 
     installLearnerSupportApi();
