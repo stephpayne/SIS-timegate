@@ -3,24 +3,27 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
 import shutil
-import sys
 import tempfile
+import zipfile
+import stat
+import hashlib
+from pathlib import PurePosixPath
 import urllib.parse
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-from course_descriptor import DescriptorError, extract_course_descriptor
-from timegate_config import (
+from .observability import DescriptorError, extract_course_descriptor
+from .config import (
     TimegateConfigError,
     derive_timegate_course_key,
     load_timegate_config,
+    validate_timegate_config,
 )
 
 
@@ -474,12 +477,17 @@ def _inject_timegate(
                 count=1,
             )
         return html[: match.start()] + updated_tag + html[match.end() :]
-    if html.count(OBSERVABILITY_END) != 1:
-        raise InstrumentationError(
-            "Timegate must be injected after one observability host block"
-        )
-    anchor_start = html.index(OBSERVABILITY_END)
-    anchor_end = anchor_start + len(OBSERVABILITY_END)
+    if OBSERVABILITY_END in html:
+        anchor_start = html.index(OBSERVABILITY_END)
+        anchor_end = anchor_start + len(OBSERVABILITY_END)
+    else:
+        anchors = list(re.finditer(
+            r"<script\b(?=[^>]*\bsrc\s*=\s*[\"'][^\"']*lms-interface\.js[\"'])[^>]*>\s*</script>",
+            html, re.IGNORECASE,
+        ))
+        if len(anchors) != 1:
+            raise InstrumentationError("Expected exactly one synchronous lms-interface.js bootstrap")
+        anchor_start, anchor_end = anchors[0].span()
     line_start = html.rfind("\n", 0, anchor_start) + 1
     indent_match = re.match(r"[ \t]*", html[line_start:anchor_start])
     indent = indent_match.group(0) if indent_match else ""
@@ -505,6 +513,7 @@ def _verify_rendered(
     expected_timegate_js: str,
     expected_timegate_css: str,
     expected_storage_mode: str,
+    telemetry: bool = True,
 ) -> None:
     expected_driver = (
         driver_html.count(OBSERVABILITY_START),
@@ -512,7 +521,7 @@ def _verify_rendered(
         driver_html.count('data-sis-observability="config"'),
         driver_html.count('data-sis-observability="host"'),
     )
-    if expected_driver != (1, 1, 1, 1):
+    if expected_driver != ((1, 1, 1, 1) if telemetry else (0, 0, 0, 0)):
         raise InstrumentationError(
             "Rendered launch HTML did not contain one observability block"
         )
@@ -521,7 +530,7 @@ def _verify_rendered(
         content_html.count(CONTENT_PROBE_END),
         content_html.count('data-sis-observability="content-probe"'),
     )
-    if expected_content != (1, 1, 1):
+    if expected_content != ((1, 1, 1) if telemetry else (0, 0, 0)):
         raise InstrumentationError(
             "Rendered content HTML did not contain one content-probe block"
         )
@@ -541,11 +550,11 @@ def _verify_rendered(
         driver_html,
         re.IGNORECASE,
     )
-    if host_tag is None or re.search(
+    if telemetry and (host_tag is None or re.search(
         r"\s(?:async|defer)(?=\s|=|/?>)",
         host_tag.group(0),
         re.IGNORECASE,
-    ):
+    )):
         raise InstrumentationError(
             "The observability host must execute synchronously"
         )
@@ -601,13 +610,14 @@ def _verify_rendered(
         raise InstrumentationError(
             "Non-local Timegate packages may not retain a local-only storage marker"
         )
-    if not lms_tag.start() < host_tag.start() < timegate_tag.start():
+    anchor_tag = host_tag if telemetry else lms_tag
+    if not (lms_tag.start() <= anchor_tag.start() < timegate_tag.start()):
         raise InstrumentationError(
             "Rendered launch script order must be lms-interface, host, Timegate"
         )
     if re.search(
         r"<script\b",
-        driver_html[host_tag.end() : timegate_tag.start()],
+        driver_html[anchor_tag.end() : timegate_tag.start()],
         re.IGNORECASE,
     ):
         raise InstrumentationError(
@@ -620,7 +630,7 @@ def _verify_rendered(
         re.IGNORECASE,
     )
     probe_index = content_html.find('data-sis-observability="content-probe"')
-    if bootstrap_index is None or probe_index > bootstrap_index.start():
+    if telemetry and (bootstrap_index is None or probe_index > bootstrap_index.start()):
         raise InstrumentationError(
             "The content probe must load before the Rise bootstrap"
         )
@@ -628,7 +638,7 @@ def _verify_rendered(
         raise InstrumentationError(
             "Rendered launch HTML does not contain the exact generated config"
         )
-    for href in (*TIMEGATE_FILES, *OBSERVABILITY_FILES):
+    for href in TIMEGATE_FILES + (OBSERVABILITY_FILES if telemetry else ()):
         if _manifest_href_count(manifest_text, href) != 1:
             raise InstrumentationError(
                 f"Manifest must register {href} exactly once"
@@ -655,297 +665,203 @@ def _atomic_write(path: Path, value: bytes) -> None:
         raise
 
 
+def inspect_root(root: Path) -> dict[str, Any]:
+    """Read just the identity needed by Timegate; telemetry has stricter metadata."""
+    root = root.resolve()
+    manifest = ET.parse(root / 'imsmanifest.xml').getroot()
+    resources = [e for e in manifest.iter() if e.tag.rsplit('}', 1)[-1] == 'resource'
+                 and (_attribute(e, 'scormtype') or '').lower() == 'sco']
+    launch = _sco_launch_path(root / 'imsmanifest.xml')
+    version = next((e.text or '' for e in manifest.iter()
+                    if e.tag.rsplit('}', 1)[-1] == 'schemaversion'), '').strip()
+    if version not in {'1.2', '2004', 'CAM 1.3', '2004 2nd Edition', '2004 3rd Edition', '2004 4th Edition'}:
+        raise InstrumentationError(f'Unsupported SCORM version: {version}')
+    driver = _read_text(_resolve_inside(root, launch, 'SCO launch href'))
+    match = re.search(r'<script\b[^>]*\bid=["\']__DRIVER_CONFIG__["\'][^>]*>(.*?)</script>', driver, re.S | re.I)
+    if not match:
+        raise InstrumentationError('Rise driver config is missing')
+    config = json.loads(match.group(1))
+    title = next((e.text for e in manifest.iter() if e.tag.rsplit('}', 1)[-1] == 'title' and e.text), root.name)
+    return dict(title=title, scormVersion=version, manifestIdentifier=manifest.get('identifier', ''),
+                scoResourceIdentifier=resources[0].get('identifier', ''), scoLaunchPath=launch,
+                packageVersion=config.get('coursePackageVersion', ''))
+
+
 def instrument_package(
-    package_root: Path,
-    source_root: Path,
-    endpoint: str,
-    source_key_id: str,
-    pilot_token: str,
-    paycom_course_id: str,
-    timegate_config: Path | None = None,
+    package_root: Path, source_root: Path,
+    endpoint: str | None = None, source_key_id: str = '', pilot_token: str = '',
+    paycom_course_id: str = '', timegate_config: Path | None = None,
 ) -> dict[str, Any]:
-    root = package_root.resolve()
-    source = source_root.resolve()
-    if not root.is_dir():
-        raise InstrumentationError(f"Package root is not a directory: {root}")
-
-    endpoint = _validate_endpoint(endpoint)
-    source_key_id = _validate_identifier(
-        "Source-key ID", source_key_id, max_length=64
-    )
-    pilot_token = _validate_token(pilot_token)
-    paycom_course_id = _validate_identifier(
-        "Paycom Course ID", paycom_course_id
-    )
-
-    source_files = {
-        "timegate/timegate.js": source / "src" / "timegate.js",
-        "timegate/timegate.css": source / "src" / "timegate.css",
-        "timegate/timegate.config.json": (
-            timegate_config.resolve()
-            if timegate_config
-            else source / "src" / "timegate.config.json"
-        ),
-        "timegate/observability/host.js": (
-            source / "src" / "observability" / "host.js"
-        ),
-        "timegate/observability/content-probe.js": (
-            source / "src" / "observability" / "content-probe.js"
-        ),
-    }
-    missing = [str(path) for path in source_files.values() if not path.is_file()]
-    if missing:
-        raise InstrumentationError(
-            "Required runtime source files are missing: " + ", ".join(missing)
-        )
-
-    manifest_path = _resolve_inside(root, "imsmanifest.xml", "Manifest path")
-    launch_href = _sco_launch_path(manifest_path)
-    driver_path = _resolve_inside(root, launch_href, "SCO launch href")
-    content_path = _resolve_inside(
-        root, "scormcontent/index.html", "Rise content path"
-    )
-    if not driver_path.is_file():
-        raise InstrumentationError(f"SCO launch file does not exist: {driver_path}")
-    if not content_path.is_file():
-        raise InstrumentationError(
-            f"Rise content launch file does not exist: {content_path}"
-        )
-
-    driver_html = _read_text(driver_path)
-    content_html = _read_text(content_path)
-    manifest_text = _read_text(manifest_path)
-    expected_timegate_js = _relative_asset_path(
-        root / TIMEGATE_FILES[0], driver_path
-    )
-    expected_timegate_css = _relative_asset_path(
-        root / TIMEGATE_FILES[1], driver_path
-    )
-    _reject_existing_observability(
-        root, driver_html, content_html, manifest_text
-    )
-    timegate_state = _existing_timegate_state(
-        root,
-        driver_html,
-        manifest_text,
-        expected_timegate_js,
-        expected_timegate_css,
-    )
-    if timegate_state == "partial":
-        raise InstrumentationError(
-            "The package contains a partial Timegate installation. Start from "
-            "a clean Rise export or a complete Timegate package."
-        )
-    if timegate_state == "complete":
-        lms_index = driver_html.find("lms-interface.js")
-        timegate_index = driver_html.find('data-timegate="true"')
-        if lms_index < 0 or timegate_index < lms_index:
-            raise InstrumentationError(
-                "The existing Timegate injection order is not compatible"
-            )
-
-    descriptor = extract_course_descriptor(root)
+    """Apply one validated installation to a private staging directory."""
+    root, source = package_root.resolve(), source_root.resolve()
+    telemetry = endpoint is not None
+    if telemetry:
+        endpoint = _validate_endpoint(endpoint)
+        source_key_id = _validate_identifier('Source-key ID', source_key_id, 64)
+        pilot_token = _validate_token(pilot_token)
+        paycom_course_id = _validate_identifier('Paycom Course ID', paycom_course_id)
+    info = inspect_root(root)
+    manifest_path = root / 'imsmanifest.xml'
+    driver_path = _resolve_inside(root, info['scoLaunchPath'], 'SCO launch href')
+    content_path = _resolve_inside(root, 'scormcontent/index.html', 'Rise content path')
+    driver, content, manifest = _read_text(driver_path), _read_text(content_path), _read_text(manifest_path)
+    js, css = (_relative_asset_path(root / name, driver_path) for name in TIMEGATE_FILES[:2])
+    _reject_existing_observability(root, driver, content, manifest)
+    state = _existing_timegate_state(root, driver, manifest, js, css)
+    # A configuration file alone is a supported legacy pre-install input.
+    config_only = (root / TIMEGATE_FILES[2]).is_file() and not any(
+        (root / p).exists() for p in TIMEGATE_FILES[:2]) and not any(_timegate_tags(driver)) and not any(
+            _manifest_href_count(manifest, p) for p in TIMEGATE_FILES)
+    if config_only:
+        state = 'absent'
+    if state == 'partial':
+        raise InstrumentationError('The package contains a partial Timegate installation (stale, incomplete, or duplicate markers).')
+    descriptor = extract_course_descriptor(root) if telemetry else info
+    existing_config = root / TIMEGATE_FILES[2]
+    selected = timegate_config or (existing_config if existing_config.exists() else source / 'src/timegate.config.json')
     try:
-        derived_course_key = derive_timegate_course_key(
-            manifest_identifier=descriptor["manifestIdentifier"],
-            sco_resource_identifier=descriptor["scoResourceIdentifier"],
-            sco_launch_path=descriptor["scoLaunchPath"],
-            package_version=descriptor["packageVersion"],
-            runtime_data_path=root / "scormcontent/runtime-data.js",
-        )
+        effective = load_timegate_config(selected)
     except TimegateConfigError as exc:
-        raise InstrumentationError(
-            f"Could not derive Timegate courseKey: {exc}"
-        ) from exc
-
-    effective_config_path = source_files["timegate/timegate.config.json"]
-    if timegate_state == "complete" and timegate_config is None:
-        effective_config_path = root / "timegate/timegate.config.json"
-    try:
-        effective_timegate_config = load_timegate_config(
-            effective_config_path
-        )
-    except TimegateConfigError as exc:
-        raise InstrumentationError(
-            f"Invalid Timegate configuration: {exc}"
-        ) from exc
-    generated_course_key = effective_timegate_config.get("courseKey") is None
-    if generated_course_key:
-        effective_timegate_config["courseKey"] = derived_course_key
-    rendered_timegate_config = (
-        json.dumps(
-            effective_timegate_config,
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n"
-    ).encode("utf-8")
-
-    descriptor_with_paycom = {**descriptor, "paycomCourseId": paycom_course_id}
-    version = _read_text(source / "VERSION").strip()
+        raise InstrumentationError(f"Invalid Timegate configuration: {exc}") from exc
+    effective = {**load_timegate_config(source / 'src/timegate.config.json'), **effective}
+    validate_timegate_config(effective)
+    if effective.get('courseKey') is None:
+        effective['courseKey'] = derive_timegate_course_key(
+            manifest_identifier=info['manifestIdentifier'], sco_resource_identifier=info['scoResourceIdentifier'],
+            sco_launch_path=info['scoLaunchPath'], package_version=info['packageVersion'],
+            runtime_data_path=root / 'scormcontent/runtime-data.js')
+    files = TIMEGATE_FILES + (OBSERVABILITY_FILES if telemetry else ())
+    destinations = {p: _destination_inside(root, p) for p in files}
+    source_files = {p: source / 'src' / p.removeprefix('timegate/') for p in files if p != TIMEGATE_FILES[2]}
+    for path in source_files.values():
+        if not path.is_file():
+            raise InstrumentationError(f'Required runtime source file is missing: {path}')
+    version = _read_text(source / 'VERSION').strip()
     if not version or len(version) > 64:
-        raise InstrumentationError("VERSION must contain 1 to 64 characters")
-    config = {
-        "enabled": True,
-        "endpoint": endpoint,
-        "source": {"keyId": source_key_id, "token": pilot_token},
-        "course": descriptor_with_paycom,
-        "instrumentationVersion": version,
-        "timegateVersion": version,
-        "corsFallbackBaseDelayMs": 15_000,
-        "corsFallbackJitterMs": 5_000,
-    }
-    rendered_config = _safe_inline_json(config)
-
-    destinations = {
-        relative_path: _destination_inside(root, relative_path)
-        for relative_path in source_files
-    }
-    host_asset = destinations[OBSERVABILITY_FILES[0]]
-    probe_asset = destinations[OBSERVABILITY_FILES[1]]
-    updated_driver = _inject_after_lms_interface(
-        driver_html,
-        config,
-        _relative_asset_path(host_asset, driver_path),
-    )
-    updated_driver = _inject_timegate(
-        updated_driver,
-        expected_timegate_js,
-        expected_timegate_css,
-        timegate_state,
-        str(effective_timegate_config.get("storageMode") or "dual"),
-    )
-    updated_content = _inject_content_probe(
-        content_html, _relative_asset_path(probe_asset, content_path)
-    )
-    updated_manifest = _register_manifest_files(
-        manifest_path,
-        launch_href,
-        (*TIMEGATE_FILES, *OBSERVABILITY_FILES),
-    )
-    updated_manifest_text = updated_manifest.decode(
-        "utf-8", errors="surrogateescape"
-    )
-    _verify_rendered(
-        updated_driver,
-        updated_content,
-        updated_manifest_text,
-        rendered_config,
-        expected_timegate_js,
-        expected_timegate_css,
-        str(effective_timegate_config.get("storageMode") or "dual"),
-    )
-
-    for relative_path, source_path in source_files.items():
-        destination = destinations[relative_path]
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if relative_path == "timegate/timegate.config.json":
-            if generated_course_key:
-                _atomic_write(destination, rendered_timegate_config)
-            elif not (
-                timegate_state == "complete"
-                and destination.is_file()
-                and timegate_config is None
-            ):
-                shutil.copyfile(source_path, destination)
-            continue
-        shutil.copyfile(source_path, destination)
-
-    _atomic_write(driver_path, updated_driver.encode("utf-8"))
-    _atomic_write(content_path, updated_content.encode("utf-8"))
-    _atomic_write(manifest_path, updated_manifest)
-
-    for relative_path in (*TIMEGATE_FILES, *OBSERVABILITY_FILES):
-        if not (root / relative_path).is_file():
-            raise InstrumentationError(
-                f"Installed package is missing {relative_path}"
-            )
-    try:
-        installed_timegate_config = load_timegate_config(
-            root / "timegate/timegate.config.json"
-        )
-    except TimegateConfigError as exc:
-        raise InstrumentationError(
-            f"Installed Timegate configuration is invalid: {exc}"
-        ) from exc
-    if installed_timegate_config.get("courseKey") != effective_timegate_config.get(
-        "courseKey"
-    ):
-        raise InstrumentationError(
-            "Installed Timegate configuration did not preserve its courseKey"
-        )
-    _verify_rendered(
-        _read_text(driver_path),
-        _read_text(content_path),
-        _read_text(manifest_path),
-        rendered_config,
-        expected_timegate_js,
-        expected_timegate_css,
-        str(effective_timegate_config.get("storageMode") or "dual"),
-    )
-    return descriptor_with_paycom
+        raise InstrumentationError('VERSION must contain 1 to 64 characters')
+    rendered_config = ''
+    if telemetry:
+        descriptor = {**descriptor, 'paycomCourseId': paycom_course_id}
+        config = dict(enabled=True, endpoint=endpoint, source=dict(keyId=source_key_id, token=pilot_token),
+                      course=descriptor, instrumentationVersion=version, timegateVersion=version,
+                      corsFallbackBaseDelayMs=15000, corsFallbackJitterMs=5000)
+        rendered_config = _safe_inline_json(config)
+        driver = _inject_after_lms_interface(driver, config, _relative_asset_path(destinations[OBSERVABILITY_FILES[0]], driver_path))
+        content = _inject_content_probe(content, _relative_asset_path(destinations[OBSERVABILITY_FILES[1]], content_path))
+    driver = _inject_timegate(driver, js, css, state, effective['storageMode'])
+    manifest_bytes = _register_manifest_files(manifest_path, info['scoLaunchPath'], files)
+    _verify_rendered(driver, content, manifest_bytes.decode('utf-8'), rendered_config,
+                     js, css, effective['storageMode'], telemetry)
+    # No package writes occur until all rendered changes have passed validation.
+    for name, dest in destinations.items():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        payload = (json.dumps(effective, ensure_ascii=False, indent=2) + '\n').encode() if name == TIMEGATE_FILES[2] else source_files[name].read_bytes()
+        _atomic_write(dest, payload)
+    _atomic_write(driver_path, driver.encode('utf-8'))
+    if telemetry:
+        _atomic_write(content_path, content.encode('utf-8'))
+    _atomic_write(manifest_path, manifest_bytes)
+    _verify_rendered(_read_text(driver_path), _read_text(content_path), _read_text(manifest_path),
+                     rendered_config, js, css, effective['storageMode'], telemetry)
+    return descriptor
 
 
-def _parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Install Timegate and SCORM observability into a Rise package."
-    )
-    parser.add_argument("package", type=Path, help="Unpacked SCORM package root")
-    parser.add_argument(
-        "--source-root",
-        type=Path,
-        required=True,
-        help="SIS-timegate repository root",
-    )
-    parser.add_argument(
-        "--telemetry-endpoint",
-        default=os.environ.get("SCORM_TELEMETRY_ENDPOINT", ""),
-    )
-    parser.add_argument(
-        "--source-key-id",
-        default=os.environ.get("SCORM_SOURCE_KEY_ID", ""),
-    )
-    parser.add_argument(
-        "--pilot-token",
-        default=os.environ.get("SCORM_PILOT_TOKEN", ""),
-    )
-    parser.add_argument(
-        "--paycom-course-id",
-        default=os.environ.get("PAYCOM_COURSE_ID", ""),
-    )
-    parser.add_argument(
-        "--timegate-config",
-        type=Path,
-        help="Use this generated/custom Timegate config",
-    )
-    return parser.parse_args(argv)
+def extract_source(source: Path, stage: Path) -> Path:
+    """Extract without traversal, links, ambiguous names, or input mutation."""
+    if source.is_dir():
+        if any(p.is_symlink() for p in source.rglob('*')):
+            raise InstrumentationError('Package directories may not contain symbolic links')
+        shutil.copytree(source, stage, dirs_exist_ok=True)
+    else:
+        with zipfile.ZipFile(source) as archive:
+            seen = set()
+            for entry in archive.infolist():
+                path = PurePosixPath(entry.filename)
+                parts = path.parts
+                if (path.is_absolute() or not parts or '..' in parts or '\\' in entry.filename
+                        or any(':' in p for p in parts) or any(p.rstrip(' .') != p for p in parts)
+                        or stat.S_ISLNK(entry.external_attr >> 16)):
+                    raise InstrumentationError('ZIP contains an unsafe path or symbolic link')
+                normalized = str(path).casefold()
+                if normalized in seen:
+                    raise InstrumentationError('ZIP contains duplicate or case-colliding paths')
+                seen.add(normalized)
+            archive.extractall(stage)
+    manifests = [p for p in stage.rglob('imsmanifest.xml') if '__MACOSX' not in p.parts]
+    if len(manifests) != 1:
+        raise InstrumentationError(f'Expected exactly one imsmanifest.xml; found {len(manifests)}')
+    return manifests[0].parent
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv or sys.argv[1:])
-    try:
-        descriptor = instrument_package(
-            args.package,
-            args.source_root,
-            args.telemetry_endpoint,
-            args.source_key_id,
-            args.pilot_token,
-            args.paycom_course_id,
-            args.timegate_config,
-        )
-        print(
-            "Installed Timegate and SCORM observability "
-            f"(course: {descriptor['riseCourseId']}, "
-            f"package: {descriptor['packageVersion']}, "
-            f"structure: {descriptor['structureHash']})"
-        )
-        for warning in descriptor["warnings"]:
-            print(f"Descriptor warning: {warning['code']}")
-        return 0
-    except (DescriptorError, InstrumentationError, OSError) as exc:
-        print(f"Package instrumentation failed: {exc}", file=sys.stderr)
-        return 1
+def inspect_package(source: Path) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix='timegate-inspect-') as temp:
+        return inspect_root(extract_source(source.resolve(), Path(temp)))
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def build_package(source: Path, source_root: Path, output: Path | None = None,
+                  *, replace: bool = False, config_path: Path | None = None,
+                  overrides: dict[str, Any] | None = None,
+                  telemetry: dict[str, str] | None = None, in_place: bool = False) -> dict[str, Any]:
+    """Build privately, verify the actual ZIP, then atomically publish it."""
+    source, source_root = source.resolve(), source_root.resolve()
+    output = (output or source.with_name(source.stem + '-timegate.zip')).absolute()
+    if output.resolve() == source:
+        raise InstrumentationError('Output must differ from the source')
+    if source.is_dir() and output.resolve().is_relative_to(source):
+        raise InstrumentationError('Output must be outside the source directory')
+    if output.exists() and not replace:
+        raise InstrumentationError('Output already exists; use --replace explicitly')
+    if not output.parent.is_dir():
+        raise InstrumentationError('Output parent directory does not exist')
+    if in_place and not source.is_dir():
+        raise InstrumentationError('--in-place requires an unpacked directory')
+    with tempfile.TemporaryDirectory(prefix='.timegate-', dir=output.parent) as temp:
+        work = Path(temp)
+        root = extract_source(source, work / 'source')
+        info = inspect_root(root)
+        source_package_root = source / root.relative_to(work / 'source')
+        before = {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+        chosen = config_path or (root / TIMEGATE_FILES[2] if (root / TIMEGATE_FILES[2]).exists() else source_root / 'src/timegate.config.json')
+        config = {**load_timegate_config(source_root / 'src/timegate.config.json'), **load_timegate_config(chosen)}
+        config.update(overrides or {})
+        validate_timegate_config(config)
+        effective_path = work / 'config.json'
+        effective_path.write_text(json.dumps(config), encoding='utf-8')
+        descriptor = instrument_package(root, source_root, timegate_config=effective_path, **(telemetry or {}))
+        updated = {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+        permitted = set(TIMEGATE_FILES) | {info['scoLaunchPath'], 'imsmanifest.xml'}
+        if telemetry:
+            permitted.update((*OBSERVABILITY_FILES, 'scormcontent/index.html'))
+        if any(name not in permitted and updated.get(name) != value for name, value in before.items()):
+            raise InstrumentationError('Build changed unrelated course content')
+        if set(updated) - set(before) - permitted:
+            raise InstrumentationError('Build added unexpected files')
+        staged_zip = work / 'package.zip'
+        with zipfile.ZipFile(staged_zip, 'w', zipfile.ZIP_DEFLATED) as archive:
+            for name, value in sorted(updated.items()):
+                archive.writestr(name, value)
+        with zipfile.ZipFile(staged_zip) as archive:
+            if archive.testzip() is not None or set(archive.namelist()) != set(updated):
+                raise InstrumentationError('ZIP integrity verification failed')
+            for name, value in updated.items():
+                if archive.read(name) != value:
+                    raise InstrumentationError('ZIP content verification failed')
+        effective = load_timegate_config(root / TIMEGATE_FILES[2])
+        # Readback is verified before publishing; no partial output on failure.
+        if replace:
+            os.replace(staged_zip, output)
+        else:
+            os.link(staged_zip, output)  # atomic no-clobber, including a competing build
+        if in_place:
+            # Legacy core entry points update unpacked inputs after ZIP verification.
+            for name in permitted:
+                if name in updated:
+                    dest = _destination_inside(source_package_root, name)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    _atomic_write(dest, updated[name])
+        # Credentials remain in the explicitly configured package, never in this receipt.
+        public_settings = {k: v for k, v in effective.items() if k not in {'seatTimeRelayKey', 'seatTimeRelayUrl'}}
+        return dict(output=str(output), title=info['title'], scormVersion=info['scormVersion'],
+                    settings=public_settings, version=_read_text(source_root / 'VERSION').strip(),
+                    telemetryEnabled=bool(telemetry), verified=True,
+                    sha256=hashlib.sha256(output.read_bytes()).hexdigest(), warnings=descriptor.get('warnings', []))

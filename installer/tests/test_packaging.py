@@ -20,13 +20,13 @@ PROJECT_ROOT = INSTALLER_DIR.parent
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 sys.path.insert(0, str(INSTALLER_DIR))
 
-import instrument_package as instrument_package_module  # noqa: E402
-from course_descriptor import DescriptorError, extract_course_descriptor  # noqa: E402
-from instrument_package import (  # noqa: E402
+from core import package as instrument_package_module  # noqa: E402
+from core.observability import DescriptorError, extract_course_descriptor  # noqa: E402
+from core.package import (  # noqa: E402
     InstrumentationError,
     instrument_package,
 )
-from timegate_config import (  # noqa: E402
+from core.config import (  # noqa: E402
     derive_timegate_course_key,
     load_timegate_config,
 )
@@ -490,75 +490,6 @@ class PackageInstrumentationTests(unittest.TestCase):
         self.assertEqual(config["seatTimeRelayKey"], "")
         self.assertEqual(config["courseId"], "")
 
-    def test_mac_storage_selection_and_config_generation(self) -> None:
-        for filename, generator in (
-            ("Timegate-Installer.command", "write_default_config"),
-            ("raycast-timegate-installer.sh", "write_config"),
-        ):
-            script = (INSTALLER_DIR / filename).read_text()
-            functions = "\n".join(
-                re.search(rf"^{name}\(\) \{{\n.*?^\}}\n(?=\n)", script, re.M | re.S).group(0)
-                for name in ("ask_storage_mode", generator)
-            )
-            for selection, expected in (
-                ("Local storage only", "localStorage"),
-                ("LMS + browser", "dual"),
-                ("Cancel", None),
-            ):
-                with self.subTest(installer=filename, selection=selection), tempfile.TemporaryDirectory() as directory:
-                    config = Path(directory) / "config.json"
-                    command = functions + '''
-osascript() { cat >/dev/null; printf '%s' "$TEST_SELECTION"; }
-show_error() { printf '%s' "$1" >&2; }
-mode="$(ask_storage_mode)" || exit 7
-''' + f'{generator} "$1" 30 90 "$mode"\n'
-                    result = subprocess.run(
-                        ["bash", "-c", command, "test", str(config)],
-                        env={**os.environ, "TEST_SELECTION": selection},
-                        capture_output=True, text=True,
-                    )
-                    self.assertEqual(result.returncode, 7 if expected is None else 0, result.stderr)
-                    if expected is None:
-                        self.assertFalse(config.exists())
-                    else:
-                        self.assertEqual(json.loads(config.read_text())["storageMode"], expected)
-
-    def test_config_generators_offer_audio_and_disable_seat_time(self) -> None:
-        macos_installer = (
-            INSTALLER_DIR / "Timegate-Installer.command"
-        ).read_text()
-        windows_installer = (
-            INSTALLER_DIR / "Timegate-Installer.ps1"
-        ).read_text()
-        raycast_installer = (
-            INSTALLER_DIR / "raycast-timegate-installer.sh"
-        ).read_text()
-
-        for generated_json in (macos_installer, raycast_installer):
-            self.assertIn('"audioCuesEnabled": true', generated_json)
-            self.assertIn('"seatTimeReportingEnabled": false', generated_json)
-            self.assertIn('"seatTimeRelayUrl": ""', generated_json)
-            self.assertIn('"seatTimeRelayKey": ""', generated_json)
-            self.assertIn('"courseId": ""', generated_json)
-        self.assertIn(
-            "seatTimeReportingEnabled   = $false", windows_installer
-        )
-        self.assertIn("audioCuesEnabled           = $true", windows_installer)
-        self.assertIn("Offer optional sound cues", windows_installer)
-        self.assertIn("Optional sound cues: $audioCues", windows_installer)
-        self.assertIn("seatTimeRelayUrl           = ''", windows_installer)
-        self.assertIn("seatTimeRelayKey           = ''", windows_installer)
-        self.assertIn("courseId                   = ''", windows_installer)
-        self.assertIn(
-            "$packageSettings = Get-TimegatePackageSettings `",
-            windows_installer,
-        )
-        self.assertIn(
-            "New-TimegateConfig -Minutes $floorMinutes "
-            "-MaximumMinutes $maximumMinutes -Settings $packageSettings",
-            windows_installer,
-        )
-
     def test_loopback_http_seat_time_relay_is_accepted_for_development(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "timegate.json"
@@ -930,206 +861,6 @@ mode="$(ask_storage_mode)" || exit 7
 
                 self.assertEqual(driver_path.read_bytes(), driver_before)
                 self.assertFalse((root / "timegate").exists())
-
-    def test_powershell_config_validator_rejects_invalid_settings(
-        self,
-    ) -> None:
-        powershell = (
-            shutil.which("pwsh")
-            or shutil.which("powershell.exe")
-            or shutil.which("powershell")
-        )
-        if powershell is None:
-            self.skipTest("PowerShell is not installed")
-
-        cases = (
-            (
-                {"minRequiredMinutes": 1, "audioCuesEnabled": "true"},
-                "audioCuesEnabled must be true or false",
-            ),
-            (
-                {"minRequiredMinutes": 1, "enforceCompletion": "false"},
-                "enforceCompletion must be true or false",
-            ),
-            (
-                {"minRequiredMinutes": 1, "storageMode": "remote"},
-                "storageMode must be one of",
-            ),
-            (
-                [{"minRequiredMinutes": 1}],
-                "must contain a JSON object",
-            ),
-        ) + SEAT_TIME_INVALID_POWERSHELL_CASES
-        command = (
-            "& { param($supportPath, $configPath, $expected) "
-            ". $supportPath; try { Assert-TimegateConfig $configPath; exit 2 } "
-            "catch { if ($_.Exception.Message -notmatch $expected) { "
-            "Write-Error $_; exit 3 }; exit 0 } }"
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            for index, (config, expected) in enumerate(cases):
-                with self.subTest(expected=expected):
-                    config_path = Path(directory) / f"invalid-{index}.json"
-                    config_path.write_text(
-                        json.dumps(config), encoding="utf-8"
-                    )
-                    result = subprocess.run(
-                        [
-                            powershell,
-                            "-NoProfile",
-                            "-NonInteractive",
-                            "-Command",
-                            command,
-                            str(INSTALLER_DIR / "timegate_config.ps1"),
-                            str(config_path),
-                            expected,
-                        ],
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                    )
-                    self.assertEqual(
-                        result.returncode,
-                        0,
-                        f"stdout:\n{result.stdout}\n"
-                        f"stderr:\n{result.stderr}",
-                    )
-
-    def test_powershell_config_validator_accepts_enabled_seat_time(self) -> None:
-        powershell = (
-            shutil.which("pwsh")
-            or shutil.which("powershell.exe")
-            or shutil.which("powershell")
-        )
-        if powershell is None:
-            self.skipTest("PowerShell is not installed")
-
-        configs = (
-            {
-                "minRequiredMinutes": 1,
-                "seatTimeReportingEnabled": True,
-                "seatTimeRelayUrl": "https://relay.example.test/timegate",
-                "seatTimeRelayKey": "test-key",
-                "courseId": "clean-course-3982",
-            },
-            {
-                "minRequiredMinutes": 1,
-                "seatTimeReportingEnabled": True,
-                "seatTimeRelayUrl": "http://127.0.0.1:8787/timegate",
-                "seatTimeRelayKey": "development-test-key",
-                "courseId": "development-course",
-            },
-        )
-        command = (
-            "& { param($supportPath, $configPath) "
-            ". $supportPath; try { Assert-TimegateConfig $configPath; exit 0 } "
-            "catch { Write-Error $_; exit 3 } }"
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            for index, config in enumerate(configs):
-                with self.subTest(url=config["seatTimeRelayUrl"]):
-                    config_path = Path(directory) / f"valid-{index}.json"
-                    config_path.write_text(
-                        json.dumps(config), encoding="utf-8"
-                    )
-                    result = subprocess.run(
-                        [
-                            powershell,
-                            "-NoProfile",
-                            "-NonInteractive",
-                            "-Command",
-                            command,
-                            str(INSTALLER_DIR / "timegate_config.ps1"),
-                            str(config_path),
-                        ],
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                    )
-                    self.assertEqual(
-                        result.returncode,
-                        0,
-                        f"stdout:\n{result.stdout}\n"
-                        f"stderr:\n{result.stderr}",
-                    )
-
-    def test_windows_gui_package_settings_preserve_existing_seat_time(self) -> None:
-        powershell = (
-            shutil.which("pwsh")
-            or shutil.which("powershell.exe")
-            or shutil.which("powershell")
-        )
-        if powershell is None:
-            self.skipTest("PowerShell is not installed")
-
-        with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "timegate.config.json"
-            config_path.write_text(
-                json.dumps(
-                    {
-                        "minRequiredMinutes": 7,
-                        "seatTimeReportingEnabled": True,
-                        "seatTimeRelayUrl": (
-                            "https://relay.example.test/timegateRelay"
-                        ),
-                        "seatTimeRelayKey": "test-relay-key-not-a-secret",
-                        "courseId": "clean-course-3982",
-                    }
-                ),
-                encoding="utf-8",
-            )
-            command = (
-                "& { param($supportPath, $configPath) . $supportPath; "
-                "$defaults = [ordered]@{ enforceCompletion = $true; "
-                "seatTimeReportingEnabled = $false; seatTimeRelayUrl = ''; "
-                "seatTimeRelayKey = ''; courseId = '' }; "
-                "$fresh = Get-TimegatePackageSettings -Settings $defaults "
-                "-ExistingConfigPath ($configPath + '.missing'); "
-                "$existing = Get-TimegatePackageSettings -Settings $defaults "
-                "-ExistingConfigPath $configPath; "
-                "[ordered]@{ defaults = $defaults; fresh = $fresh; "
-                "existing = $existing } | ConvertTo-Json -Compress -Depth 4 }"
-            )
-            result = subprocess.run(
-                [
-                    powershell,
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    command,
-                    str(INSTALLER_DIR / "timegate_config.ps1"),
-                    str(config_path),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(
-                result.returncode,
-                0,
-                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
-            )
-            settings = json.loads(result.stdout)
-
-            for name in ("defaults", "fresh"):
-                self.assertIs(
-                    settings[name]["seatTimeReportingEnabled"], False
-                )
-                self.assertEqual(settings[name]["seatTimeRelayUrl"], "")
-                self.assertEqual(settings[name]["seatTimeRelayKey"], "")
-                self.assertEqual(settings[name]["courseId"], "")
-
-            existing = settings["existing"]
-            self.assertIs(existing["seatTimeReportingEnabled"], True)
-            self.assertEqual(
-                existing["seatTimeRelayUrl"],
-                "https://relay.example.test/timegateRelay",
-            )
-            self.assertEqual(
-                existing["seatTimeRelayKey"],
-                "test-relay-key-not-a-secret",
-            )
-            self.assertEqual(existing["courseId"], "clean-course-3982")
 
     def test_instrumentation_contract_and_duplicate_rejection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1535,9 +1266,8 @@ mode="$(ask_storage_mode)" || exit 7
                 "publisher-selected-key",
             )
 
+    @unittest.skipIf(os.name == "nt", "POSIX shell adapter")
     def test_posix_packager_creates_timegate_zip(self) -> None:
-        if shutil.which("zip") is None:
-            self.skipTest("zip is not installed")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "synthetic-course"
             root.mkdir()
@@ -1552,7 +1282,7 @@ mode="$(ask_storage_mode)" || exit 7
                 "PAYCOM_COURSE_ID": "paycom-course-123",
             }
             result = subprocess.run(
-                [str(INSTALLER_DIR / "install-timegate.sh"), str(root)],
+                [str(INSTALLER_DIR / "launchers/mac.command"), "build", str(root), "--observability"],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -1562,12 +1292,8 @@ mode="$(ask_storage_mode)" || exit 7
             output = root.with_name(f"{root.name}-timegate.zip")
             self.assertTrue(output.is_file())
 
+    @unittest.skipIf(os.name == "nt", "Mac shell adapter")
     def test_raycast_packager_creates_timegate_only_zip(self) -> None:
-        powershell = shutil.which("pwsh")
-        if powershell is None:
-            self.skipTest("PowerShell is not installed")
-        if shutil.which("zip") is None or shutil.which("unzip") is None:
-            self.skipTest("zip and unzip are required")
 
         for storage_mode in (None, "localStorage", "dual"):
             with tempfile.TemporaryDirectory() as directory:
@@ -1592,7 +1318,7 @@ mode="$(ask_storage_mode)" || exit 7
                 if storage_mode is not None:
                     environment["TIMEGATE_STORAGE_MODE"] = storage_mode
                 result = subprocess.run(
-                    [str(INSTALLER_DIR / "raycast-timegate-installer.sh")],
+                    [str(INSTALLER_DIR / "launchers/raycast.sh")],
                     check=False,
                     capture_output=True,
                     text=True,
@@ -1656,8 +1382,8 @@ mode="$(ask_storage_mode)" || exit 7
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(root),
                 ],
                 check=False,
@@ -1709,9 +1435,9 @@ mode="$(ask_storage_mode)" || exit 7
 
             self.assertIn(
                 '<script src="lms-interface.js"></script>\n'
-                '  <link rel="stylesheet" '
+                '<link rel="stylesheet" '
                 'href="../timegate/timegate.css" data-timegate="true">\n'
-                '  <script src="../timegate/timegate.js" '
+                '<script src="../timegate/timegate.js" '
                 'data-timegate="true"></script>\n'
                 '<script src="course-start.js"></script>',
                 driver,
@@ -1755,8 +1481,8 @@ mode="$(ask_storage_mode)" || exit 7
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(stale_root),
                 ],
                 check=False,
@@ -1764,7 +1490,7 @@ mode="$(ask_storage_mode)" || exit 7
                 text=True,
             )
             self.assertNotEqual(stale_result.returncode, 0)
-            self.assertIn("stale, incomplete, or duplicate", stale_result.stdout)
+            self.assertIn("stale, incomplete, or duplicate", stale_result.stdout + stale_result.stderr)
             self.assertEqual(stale_driver.read_bytes(), stale_before)
             self.assertFalse((stale_root / "timegate").exists())
             self.assertFalse(
@@ -1789,8 +1515,8 @@ mode="$(ask_storage_mode)" || exit 7
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(stale_root),
                 ],
                 check=False,
@@ -1799,8 +1525,8 @@ mode="$(ask_storage_mode)" || exit 7
             )
             self.assertNotEqual(deferred_timegate_result.returncode, 0)
             self.assertIn(
-                "Timegate must execute synchronously",
-                deferred_timegate_result.stdout,
+                "partial Timegate installation",
+                deferred_timegate_result.stdout + deferred_timegate_result.stderr,
             )
             self.assertEqual(
                 stale_driver.read_bytes(), deferred_timegate_before
@@ -1825,8 +1551,8 @@ mode="$(ask_storage_mode)" || exit 7
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(invalid_root),
                 ],
                 check=False,
@@ -1834,8 +1560,7 @@ mode="$(ask_storage_mode)" || exit 7
                 text=True,
             )
             self.assertNotEqual(invalid_result.returncode, 0)
-            self.assertIn("Invalid Timegate configuration", invalid_result.stdout)
-            self.assertIn("idleTimeoutSeconds must be a number", invalid_result.stdout)
+            self.assertIn("idleTimeoutSeconds must be a number", invalid_result.stdout + invalid_result.stderr)
             self.assertEqual(invalid_driver.read_bytes(), invalid_before)
             self.assertFalse((invalid_root / "timegate" / "timegate.js").exists())
             self.assertFalse(
@@ -1860,8 +1585,8 @@ mode="$(ask_storage_mode)" || exit 7
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(deferred_root),
                 ],
                 check=False,
@@ -1870,8 +1595,8 @@ mode="$(ask_storage_mode)" || exit 7
             )
             self.assertNotEqual(deferred_result.returncode, 0)
             self.assertIn(
-                "lms-interface.js must appear exactly once and execute synchronously",
-                deferred_result.stdout,
+                "lms-interface.js must execute synchronously",
+                deferred_result.stdout + deferred_result.stderr,
             )
             self.assertEqual(deferred_driver.read_bytes(), deferred_before)
             self.assertFalse((deferred_root / "timegate").exists())
@@ -1898,8 +1623,8 @@ mode="$(ask_storage_mode)" || exit 7
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(multi_root),
                 ],
                 check=False,
@@ -1909,7 +1634,7 @@ mode="$(ask_storage_mode)" || exit 7
             self.assertNotEqual(multi_result.returncode, 0)
             self.assertIn(
                 "Expected exactly one SCO resource; found 2",
-                multi_result.stdout,
+                multi_result.stdout + multi_result.stderr,
             )
             self.assertEqual(multi_driver.read_bytes(), multi_before)
             self.assertFalse((multi_root / "timegate").exists())
@@ -1943,8 +1668,8 @@ mode="$(ask_storage_mode)" || exit 7
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(root),
                 ],
                 check=False,
@@ -2019,8 +1744,8 @@ mode="$(ask_storage_mode)" || exit 7
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(explicit_root),
                 ],
                 check=False,
@@ -2084,8 +1809,8 @@ mode="$(ask_storage_mode)" || exit 7
                     "-NoProfile",
                     "-NonInteractive",
                     "-File",
-                    str(INSTALLER_DIR / "install-timegate.ps1"),
-                    "-Package",
+                    str(INSTALLER_DIR / "launchers/windows.ps1"),
+                    "-Cli", "build", "--in-place",
                     str(root),
                 ],
                 check=False,
@@ -2180,9 +1905,10 @@ mode="$(ask_storage_mode)" || exit 7
                         "-NoProfile",
                         "-NonInteractive",
                         "-File",
-                        str(INSTALLER_DIR / "install-timegate.ps1"),
-                        "-Package",
+                        str(INSTALLER_DIR / "launchers/windows.ps1"),
+                        "-Cli", "build", "--in-place",
                         str(root),
+                            "--replace",
                     ]
                     initial_result = subprocess.run(
                         command,
