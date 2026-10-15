@@ -15,5 +15,5 @@ test-results/
 
 # Reproducible course build scratch space
 /tmp/
-/output/**/*.docx
-/output/**/*.pdf
+# Generated packages, learner investigations, and local verification artifacts
+/output/
