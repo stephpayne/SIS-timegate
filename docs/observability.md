@@ -1,7 +1,7 @@
 # SCORM observability packaging
 
-The POSIX and macOS packagers install Timegate plus the fail-open SCORM 1.2
-observability runtime. Start from an untouched Rise export whenever possible.
+The shared engine optionally installs Timegate plus the fail-open SCORM 1.2
+observability runtime on every platform. Telemetry is off by default. Start from an untouched Rise export whenever possible.
 The output remains a separate `<course>-timegate.zip`; the macOS launcher never
 changes the selected ZIP.
 
@@ -16,18 +16,18 @@ changes the selected ZIP.
 - **Paycom Course ID:** the exact existing Paycom course identifier used for
   server-side correlation.
 
-The macOS launcher prompts for all four values and hides the token. The POSIX
-packager accepts the same values from environment variables:
+Select an advanced profile in either native interface, or explicitly enable
+observability with the CLI. The CLI accepts pilot values from environment variables:
 
 ```sh
 SCORM_TELEMETRY_ENDPOINT="https://worker.example/ingestScormTelemetry" \
 SCORM_SOURCE_KEY_ID="rise-pilot" \
 SCORM_PILOT_TOKEN="replace-with-pilot-token" \
 PAYCOM_COURSE_ID="12345" \
-  installer/install-timegate.sh /path/to/unpacked-rise-course
+  python3 installer/timegate.py build /path/to/course.zip --observability
 ```
 
-The equivalent flags are available from `install-timegate.sh --help`; the
+The equivalent flags are available from `python3 installer/timegate.py build --help`; the
 environment form is preferred for the token because command arguments can be
 visible to other local processes.
 
@@ -80,7 +80,7 @@ service URLs.
 Run the extractor directly when diagnosing a package:
 
 ```sh
-python3 installer/course_descriptor.py /path/to/unpacked-rise-course
+python3 -B -m installer.core.observability /path/to/unpacked-rise-course
 ```
 
 ## Tests

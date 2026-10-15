@@ -8,7 +8,7 @@ installer again.
 
 1. Keep the repository at `~/Code/SIS-timegate`, or set `TIMEGATE_PROJECT_ROOT`
    in the launcher to its actual absolute path.
-2. Copy `installer/raycast-launcher.sh` into your registered Raycast script
+2. Copy `installer/launchers/raycast.sh` into your registered Raycast script
    folder. Replace an existing Timegate launcher at its existing path to avoid
    duplicate commands.
 3. Make it executable with `chmod +x /path/to/your/launcher.sh`.
@@ -17,17 +17,20 @@ installer again.
    limits, and choose **Local storage only** or **LMS + browser**.
 6. Check the persistence mode in the confirmation before creating the package.
 
-The launcher requires this checkout and PowerShell 7. It installs Timegate without
-telemetry. Switching branches changes the installer and runtime used for new
+The launcher requires this checkout and Python 3.10 or newer. Telemetry is off unless
+an advanced profile explicitly enables it. Switching branches changes the installer and runtime used for new
 packages; it does not change packages already created.
 
 ## Existing local installation
 
 The installed launcher on this machine is
 `/Users/jackcasica/Downloads/time-gate-installer.sh`. It delegates to
-`/Users/jackcasica/Code/SIS-timegate/installer/raycast-timegate-installer.sh`.
+`/Users/jackcasica/Code/SIS-timegate/installer/launchers/mac.command`.
 Raycast has Downloads registered as a script folder. Keep one registered
 Timegate launcher to avoid selecting a stale copy.
+
+Both Raycast and the Mac double-click launcher use `installer/launchers/mac.command`.
+See [the installer guide](installer.md) for profiles and the shared CLI.
 
 ## Unattended packaging
 

@@ -6,7 +6,18 @@ All notable changes to Timegate are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+- Report this launch's active time when Rise writes SCORM session time, recover
+  deferred SCORM 1.2 completion after Rise unload, and release stale Timegate
+  wrappers when an LMS retains its API across replaced course documents.
+  These repairs have local regression coverage; target-LMS acceptance is pending.
+
 ### Added
+- One Python 3.10+ packaging engine shared by Mac, Windows, and Raycast; thin native
+  interfaces, centralized defaults and validation, verified atomic ZIP output,
+  explicit telemetry profiles, and launchers grouped under `installer/launchers/`.
+- Removed obsolete top-level installer wrappers after migrating tests, documentation,
+  CI, and the installed Raycast shortcut to the maintained entry points.
 - Learner-opt-in Web Audio cues for inactivity nudges and warnings, live minimum-
   time milestones, confirmed LMS completion, and terminal inactivity/maximum
   exits, with a persistent accessible mute control and learner-and-course-scoped

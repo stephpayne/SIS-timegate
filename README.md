@@ -10,78 +10,40 @@ explainer at any time.
 The current version is recorded in [`VERSION`](./VERSION), with release notes in
 [`CHANGELOG.md`](./CHANGELOG.md).
 
-## Project layout
+## Installer
 
+The installer uses one Python engine for Mac, Windows, and Raycast. It requires
+**Python 3.10 or newer**, with no additional Python packages.
+
+1. Open `installer/launchers/mac.command` on Mac or
+   `installer/launchers/windows.cmd` on Windows, or run **Timegate Installer** in Raycast.
+2. Select the original SCORM ZIP and set the minimum and optional maximum time.
+3. Choose **Local storage only** or **LMS + browser**. The interactive default is local storage only.
+4. Use standard settings, or select an advanced JSON profile for an intentional exception.
+5. Review the settings and create the package. Telemetry is off unless explicitly enabled.
+6. Upload the verified `<course>-timegate.zip` to your LMS and check completion and resume there.
+
+The original ZIP is preserved. Existing output requires an explicit replacement.
+All platform launchers live in `installer/launchers/`.
+
+```text
+installer/
+  timegate.py             Shared command-line entry point
+  core/
+    package.py            Inspect, stage, modify, verify, publish
+    config.py             Configuration and course identity validation
+    observability.py      Optional SCORM 1.2 course descriptor
+  launchers/
+    mac.command           Mac and Raycast interface
+    raycast.sh            Raycast script-command launcher
+    windows.ps1           Windows interface
+    windows.cmd           Windows double-click launcher
+  tests/                  Shared engine and adapter contracts
 ```
-timegate/
-├── VERSION             Single source of truth for the version number
-├── README.md           This file
-├── CHANGELOG.md        Release notes (newest first)
-├── MAINTAINING.md      How to change settings and cut a release
-├── src/                Runtime that ships into a course
-│   ├── timegate.js
-│   ├── timegate.css
-│   ├── timegate.config.json
-│   └── observability/
-│       ├── host.js
-│       └── content-probe.js
-└── installer/          Builds the time-gated package
-    ├── course_descriptor.py
-    ├── instrument_package.py
-    ├── timegate_config.py             Shared POSIX/macOS config validation
-    ├── timegate_config.ps1            Windows config/path validation
-    ├── Launch-Timegate-Installer.cmd   Windows launcher (double-click)
-    ├── Timegate-Installer.ps1          Windows installer interface
-    ├── Timegate-Installer.command      macOS installer (double-click)
-    ├── install-timegate.ps1            Core packager (Windows)
-    └── install-timegate.sh             Core packager (macOS/Linux)
-```
 
-## Adding Timegate to a course
-
-Double-click the installer for your platform, select the zipped SCORM package,
-and follow the prompts. No unzipping or command line is required.
-
-- **macOS observability pilot:** `installer/Timegate-Installer.command` (on
-  first run, if macOS blocks it, right-click the file and choose Open)
-- **Windows Timegate only:** `installer/Launch-Timegate-Installer.cmd`.
-  Observability parity is intentionally deferred until after the controlled
-  pilot.
-
-In the installer:
-
-1. **Select the SCORM ZIP.** The original export is not modified.
-2. **Set the required floor time** in minutes — the minimum time learners should
-   spend in the course. Optionally set a greater maximum active time; leaving it
-   blank allows unlimited time.
-3. **For an observability pilot, enter the worker endpoint, source-key ID,
-   course-scoped pilot token, and exact Paycom Course ID.**
-4. **Adjust Advanced Settings** only if the course requires an exception to the
-   standard behavior. The defaults suit most courses.
-5. **Review and confirm.** The installer writes a separate `<course>-timegate.zip`
-   beside the original and verifies that it contains the runtime files.
-6. **Upload the `-timegate.zip`** to the LMS. After uploading, launch the course,
-   close it, and reopen it to confirm the timer resumes.
-
-The runtime is deployed into a fixed `timegate/` folder inside the package. The
-folder name does not change between releases, so manifest references remain valid.
-See
-[`installer/SCORM-OBSERVABILITY.md`](./installer/SCORM-OBSERVABILITY.md)
-for the pilot package contract, privacy boundary, and non-interactive options.
-
-### Raycast installer
-
-For Timegate without telemetry, follow the [Raycast setup guide](docs/raycast-setup.md).
-Install the small launcher once so Raycast uses the maintained installer in this
-checkout, including its local storage only option.
-
-### Running the core packager directly
-
-The packagers can also be run against an already-unzipped course folder:
-
-- macOS/Linux observability pilot:
-  `installer/install-timegate.sh --help`
-- Windows: `installer\install-timegate.ps1 -Package C:\path\to\unzipped-course`
+See the [installer guide](docs/installer.md) for commands, advanced profiles,
+migration details, and local storage behavior. See [Raycast setup](docs/raycast-setup.md)
+for the maintained launcher and [observability](docs/observability.md) for the optional pilot.
 
 ## Verification
 
@@ -95,7 +57,7 @@ npm run test:all
 ```
 
 Packaging and attached-sample descriptor commands are documented in
-[`installer/SCORM-OBSERVABILITY.md`](./installer/SCORM-OBSERVABILITY.md).
+[the observability guide](docs/observability.md).
 
 ## Settings
 
@@ -257,8 +219,8 @@ The Mac and Raycast installers offer **Local storage only** or **LMS + browser**
 after the time limits, and show the selected mode before packaging. Local storage
 only is the default button in that dialog. For unattended Raycast packaging, set
 `TIMEGATE_STORAGE_MODE=localStorage`; omitting it retains the existing `dual`
-default. The Mac advanced settings can override the selection, and confirmation
-shows the final configuration value.
+default. Explicit time and storage choices take priority over an advanced profile;
+confirmation shows the final configuration value.
 
 Packages configured with `storageMode: "localStorage"` declare that policy on
 the Timegate script tag so it is available before configuration loads. In this
@@ -280,12 +242,9 @@ feature is off by default. A package opts in only when
 - `courseId`: the course's Clean Course ID. This is relay data and is distinct
   from the installer-generated `courseKey` used to isolate local Timegate state.
 
-Fresh GUI configurations include these fields but leave them disabled and empty;
-the interfaces do not expose relay controls. When the Windows GUI updates a
-package that already has a valid seat-time configuration, it preserves those four
-fields and shows only the on/off state during review. The Raycast Timegate-only
-workflow always emits disabled defaults and does not accept or print relay
-credentials. Use a reviewed custom configuration for an intentional pilot.
+Fresh configurations leave these fields disabled and empty. All installers preserve
+valid existing seat-time settings when repackaging. Use a reviewed advanced JSON
+profile for an intentional pilot. Review and build receipts omit relay credentials.
 
 `activeSeconds` comes from Timegate's canonical active clock for the current
 primary-tab ownership segment. It counts the configured background-grace interval

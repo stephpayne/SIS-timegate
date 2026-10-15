@@ -42,26 +42,15 @@ The runtime configuration file is `src/timegate.config.json`. It supports `//`
 comments and trailing commas. `minRequiredMinutes` and `maxAllowedMinutes` are
 per-course values. The remaining values are shared defaults.
 
-Keep these five locations aligned when changing a default:
+The installer reads defaults from `src/timegate.config.json`; no launcher owns a
+copy. Keep shared defaults aligned with `DEFAULT_CONFIG` in `src/timegate.js`.
+The packaging default-contract test checks parity, excluding the per-course time
+limits. The browser's zero-minute placeholder does not replace a missing config.
 
-1. `DEFAULT_CONFIG` in `src/timegate.js`
-2. `src/timegate.config.json`
-3. `Get-DefaultSettings` in `installer/Timegate-Installer.ps1`
-4. `write_default_config` in `installer/Timegate-Installer.command`
-5. `write_config` in `installer/raycast-timegate-installer.sh`
-
-The per-course floor and maximum also appear as primary controls in both GUI
-installers. Keep their validation, review text, and generated configuration in
-sync with the runtime rules (`maxAllowedMinutes` is either `null` or greater than
-`minRequiredMinutes`).
-
-Then add the change to `CHANGELOG.md`.
-
-Configuration validation is intentionally fail-closed. Keep the runtime validator,
-the Python packager validator, and the PowerShell validator aligned. An absent or
-invalid value must never be coerced into a setting that weakens completion
-enforcement. `minRequiredMinutes: 0` remains an explicit supported value for
-maximum-only courses; it is distinct from a missing or invalid setting.
+All launcher validation goes through `installer/core/config.py`. Keep it aligned
+with runtime validation. Missing or invalid core settings must never silently
+weaken completion enforcement. An explicit `minRequiredMinutes: 0` is supported
+for maximum-only courses. Add changes to `CHANGELOG.md`.
 
 Audio- and seat-time-only settings are exceptions to global runtime blocking.
 Packagers reject invalid optional settings before writes, but malformed audio
@@ -69,12 +58,8 @@ configuration that reaches the browser disables only sound. A malformed relay
 setting disables only the reporter and emits a diagnostic. Neither path may set
 `configurationBlocked` or change LMS completion behavior.
 
-The GUI installers carry their own copy of the defaults, so they must be kept in
-sync with the runtime configuration whenever a default changes. A future refactor
-could have both installers read from `src/timegate.config.json` directly.
-
-Seat-time configuration has an additional parity contract. Keep the runtime,
-Python, and PowerShell validators aligned on these limits:
+Seat-time configuration has an additional parity contract. Keep the runtime and
+shared Python validator aligned on these limits:
 
 - `seatTimeReportingEnabled` is boolean.
 - `seatTimeRelayUrl` is a string of at most 2,048 characters.
@@ -113,7 +98,7 @@ Audio configuration has one package-level capability flag:
 
 ## LMS reporting invariants
 
-- Load `lms-interface.js`, the observability host, and Timegate synchronously in
+- Load `lms-interface.js`, the optional observability host, and Timegate synchronously in
   that order. Timegate's provisional gate must run before any course bootstrap.
 - Do not clear queued completion until terminal `SetValue` calls and `Commit`
   return normalized success. A later incomplete/reset status supersedes the queue.
